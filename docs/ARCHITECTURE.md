@@ -1,6 +1,6 @@
 # HANA — ARCHITECTURE
 
-Phiên bản: 1.1 (Phase 1 — foundation + Final Decision Patch)
+Phiên bản: 1.2 (Phase 1 — foundation + Final Decision Patch + Phase 3.2 Asset Policy Patch)
 Ngày: 2026-09-15
 Trạng thái: CHỐT cho implementation. Mọi thay đổi phải cập nhật tài liệu này trước khi code.
 Vị trí canonical: `repo/docs/` (version-control cùng source). Bản ở `Hana/docs/` chỉ là bản sao cũ giữ tạm, không chỉnh sửa tiếp.
@@ -34,6 +34,7 @@ Các bảng dữ liệu chuyên biệt được định nghĩa trong spec riêng
 | D5 | Private unlock: PIN 6 số là credential bắt buộc và luôn là fallback; biometric chỉ là lớp tiện lợi tùy chọn, không bao giờ là credential duy nhất | PRIVACY_SPEC §5.2–§5.3 |
 | D6 | Tài liệu canonical ở `repo/docs/` | tiêu đề tài liệu |
 | D7 | Provider STT/TTS và private LLM: UNRESOLVED implementation choice, benchmark ở phase phù hợp | AI_PROTOCOL §2.5, VOICE_SPEC §2 |
+| D8 | **Asset policy (Phase 3.2, 2026-09-15):** dùng toàn bộ 43 video. Asset có hai trục tách biệt: `content_sensitivity ∈ {normal, suggestive, private}` (nội dung → cách phân phối/bảo vệ) và `allowed_modes ⊆ {daily, assistant, relationship, private}` (nơi hiển thị, owner override được). `daily`/`assistant` ưu tiên tier sensitivity thấp nhất trong pool; `relationship` chỉ khi owner bật; `private` dùng mọi asset được allow. Không yêu cầu asset riêng cho từng CoreState; thiếu → fallback, không fail build. Clip Phase 3 `reject` → `poor` + `excluded_by_default`; clip `review` → `review_flag`, không main-loop. LLM không bao giờ thấy/chọn asset; Character Engine chọn; video muted; voice chỉ TTS | CHARACTER_SYSTEM §2.5–§2.8, §4, §8.5, §11, §17; PRIVACY_SPEC §4.1; `PHASE_3_2_ASSET_POLICY_PATCH.md` |
 
 ---
 
@@ -45,7 +46,7 @@ Các bảng dữ liệu chuyên biệt được định nghĩa trong spec riêng
 │  Character Engine (pure Dart state machine) ─► VideoStage (2x video_player, muted)   │
 │  VoiceRecorder (record, PTT)     AudioPlayer (just_audio, TTS only)                  │
 │  LocalStore (drift/SQLite, normal only)  SecureStore (Keystore)  Outbox              │
-│  LocalNotificationScheduler      PrivateVault (encrypted private asset cache)        │
+│  LocalNotificationScheduler      AssetVault + PrivateVault (encrypted asset caches)  │
 └───────────────┬──────────────────────────────────────────────────────▲───────────────┘
                 │ HTTPS REST + SSE (JWT)                                │ FCM data msg
                 ▼                                                       │
@@ -67,8 +68,9 @@ Các bảng dữ liệu chuyên biệt được định nghĩa trong spec riêng
 ┌──────── Windows dev host (offline tooling) ────────┐
 │ asset_pipeline (Python + ffmpeg/ffprobe)           │
 │ assets_source (IMMUTABLE) ─► asset_analysis ─►     │
-│ assets_processed/{normal,private} ─► mobile bundle │
-│                                  └► server private │
+│ assets_processed/bundle        ─► mobile bundle    │
+│ assets_processed/vault         ─► server vault     │
+│ assets_processed/private_vault ─► server private   │
 └────────────────────────────────────────────────────┘
 ```
 
@@ -76,7 +78,7 @@ Nguyên tắc nền:
 
 1. **Server là nguồn sự thật** cho toàn bộ dữ liệu nghiệp vụ (INV-09). Thiết bị chỉ cache.
 2. **LLM là bộ đề xuất, không phải bộ thực thi.** LLM trả về envelope JSON có cấu trúc; backend validate rồi mới thực thi qua domain service (INV-08).
-3. **Character Engine chạy trên client**, nhận *semantic cue* (emotion/intensity/special_cue) + sự kiện app, tự chọn asset từ manifest. LLM và backend không bao giờ gửi filename/asset_id (INV-02).
+3. **Character Engine chạy trên client**, nhận *semantic cue* (emotion/intensity/special_cue + `stage_context` do Director tính xác định) + sự kiện app, tự chọn asset từ manifest qua **Asset Policy Engine** (`content_sensitivity` × `allowed_modes` × owner policy). LLM và backend không bao giờ gửi filename/asset_id; LLM không thấy metadata asset (INV-02, INV-21).
 4. **Video không có âm thanh. Giọng Hana chỉ đến từ TTS** (INV-03).
 5. **Private mode là một "vùng" tách biệt** ở mọi tầng: route API, DB schema + DB role, Redis DB, queue, module code, Flutter feature scope, cache, manifest (INV-04..07, INV-15).
 6. **Thời gian lưu UTC, tính nghiệp vụ theo Asia/Ho_Chi_Minh** (INV-01, INV-19).
@@ -90,7 +92,7 @@ Nguyên tắc nền:
 | # | Component | Chạy ở | Trách nhiệm | KHÔNG ĐƯỢC |
 |---|---|---|---|---|
 | C1 | **Flutter App** | Android | UI, input text/voice, hiển thị chat, phát TTS, hiển thị video, cache normal data, outbox, local notifications, private vault | Giữ API key provider; gọi 9Router trực tiếp; lưu private message xuống disk; tự quyết định lịch nhắc thay server |
-| C2 | **Character Engine** | Trong C1 (Dart thuần) | State machine 10 core state, chọn asset theo manifest, xử lý special cue, fallback | Nhận filename/asset_id từ server/LLM; đọc private manifest khi ở normal mode |
+| C2 | **Character Engine** (+ Asset Policy Engine) | Trong C1 (Dart thuần) | State machine 10 core state, stage context, chọn asset theo manifest (bundle/vault/private_vault) + owner asset policy (`content_sensitivity` × `allowed_modes`), xử lý special cue, fallback | Nhận filename/asset_id từ server/LLM; normal engine đọc private_vault manifest hoặc dùng context `private`; I/O trong reducer/policy engine |
 | C3 | **VideoStage** | Trong C1 | Phát clip muted, crossfade, loop, preload | Bật volume > 0; phát file không có trong manifest |
 | C4 | **api** (FastAPI) | Server | Auth, validate request, CRUD domain, tạo turn + enqueue, relay SSE từ Redis Stream, phục vụ media TTS, private session | Gọi LLM đồng bộ trong request (trừ health); giữ state turn trong RAM |
 | C5 | **worker** (arq) | Server | Xử lý turn (STT→context→LLM→validate→actions→reply→TTS), memory extraction, day summary, journal extraction, report generation, proactive message, push dispatch | Nhận request HTTP; thực thi action chưa validate |
@@ -100,7 +102,7 @@ Nguyên tắc nền:
 | C9 | **Voice Service** (STT/TTS adapters + SpeechNormalizer) | Thư viện trong C5 | Transcribe audio, chuẩn hóa text → speech, chia segment, synthesize, lưu blob | Dùng audio từ video |
 | C10 | **PostgreSQL 16** | Server | Lưu bền mọi dữ liệu nghiệp vụ; schema `hana` + `hana_private` | Bị expose ra internet |
 | C11 | **Redis 7** | Server | Queue arq, turn event streams, rate limit, private session, leader lock, debounce | Là nguồn sự thật duy nhất của bất kỳ dữ liệu nào |
-| C12 | **BlobStore** | Server (filesystem volume, interface cho S3 sau) | Lưu TTS audio, voice input tạm, private assets | Được phục vụ qua static public path |
+| C12 | **BlobStore** | Server (filesystem volume, interface cho S3 sau) | Lưu TTS audio, voice input tạm, vault assets (`ASSET_VAULT_ROOT`), private_vault assets (`PRIVATE_MEDIA_ROOT/assets`) | Được phục vụ qua static public path |
 | C13 | **9Router** | Server (internal network) / Windows host (dev) | Gateway OpenAI-compatible tới provider LLM/STT/TTS, fallback giữa provider | Được expose public; nhận request từ client |
 | C14 | **FCM** (tùy chọn) | Google | Gửi data message tới thiết bị khi đã cấu hình; hệ thống chạy đủ chức năng khi không có | Nhận nội dung private; trở thành phụ thuộc bắt buộc của reminder hay bất kỳ chức năng nào |
 | C15 | **Asset Pipeline** | Windows dev host | Phân tích, gắn nhãn, transcode muted, sinh manifest, verify | Ghi/sửa/xóa `assets_source` |
@@ -121,8 +123,10 @@ Nguyên tắc nền:
 | C5 → C14 | FCM HTTP v1 API, data-only message | §8.6 |
 | C5 → C8 | gọi hàm `direct(envelope, mode, context) -> CharacterCue` | `CHARACTER_SYSTEM.md` §6 |
 | C1 (C2) ← C4 | SSE event `character.cue` payload `CharacterCue` | `CHARACTER_SYSTEM.md` §6 |
-| C15 → C1 | File app-ready + `normal_manifest.json` copy vào `repo/mobile/assets/character/` lúc build | `CHARACTER_SYSTEM.md` §4 |
-| C15 → C12 | Upload private assets + `private_manifest.json` lên `PRIVATE_MEDIA_ROOT` | `CHARACTER_SYSTEM.md` §4.6 |
+| C15 → C1 | File `bundle` (chỉ `content_sensitivity=normal`) + `bundle_manifest.json` copy vào `repo/mobile/assets/character/bundle/` lúc build | `CHARACTER_SYSTEM.md` §4 |
+| C15 → C12 | Upload vault assets + `vault_manifest.json` lên `ASSET_VAULT_ROOT`; private_vault assets + `private_vault_manifest.json` lên `PRIVATE_MEDIA_ROOT/assets` | `CHARACTER_SYSTEM.md` §4.5–§4.6 |
+| C1 (C2) ↔ C4 | `GET /v1/assets/manifest`, `GET /v1/assets/{asset_id}`, `GET/PATCH /v1/assets/policy`, `PUT/DELETE /v1/assets/policy/overrides/{asset_id}` | `CHARACTER_SYSTEM.md` §17.3 |
+| C8 → C10 | Director đọc `relationship_stage_enabled`, `relationship_trigger` qua `domain/assets/policy_reader.py` | `CHARACTER_SYSTEM.md` §8.5.1 |
 
 ### 2.3 Quy tắc import (backend) — PHẢI enforce bằng `import-linter` trong CI
 
@@ -135,6 +139,10 @@ app/domain/private  : CÓ THỂ import core, domain/ai, domain/voice, domain/cha
 app/domain/<normal> : KHÔNG import app/domain/private, app/api/v1/private, app/db/private_*
 app/api/v1/<normal> : KHÔNG import app/api/v1/private, app/domain/private
 app/db/private_*    : chỉ được import bởi app/domain/private và app/workers/private_jobs
+app/domain/assets   : chỉ được import bởi app/api/v1/assets.py, app/api/v1/private/assets.py,
+                      và app/domain/character (CHỈ policy_reader.py). KHÔNG được import bởi
+                      app/domain/ai, app/domain/conversation (context builder), app/domain/memory,
+                      app/domain/companion (INV-21)
 ```
 
 Flutter: `lib/features/private/**` chỉ được import từ `lib/app/router.dart` (route lazy) và không file nào ngoài `lib/features/private/**` được import symbol từ đó. Enforce bằng custom lint / test quét import.
@@ -165,7 +173,7 @@ Flutter: `lib/features/private/**` chỉ được import từ `lib/app/router.da
 - Một VPS Linux, Docker Compose `infra/compose.prod.yml`.
 - Chỉ Caddy expose cổng 80/443. api, worker, scheduler, postgres, redis, 9router nằm trong network nội bộ `hana_internal`.
 - Dashboard 9Router chỉ bind `127.0.0.1`, truy cập qua SSH tunnel.
-- Volume: `pgdata`, `redisdata` (AOF bật), `media`, `private_media`, `backups`.
+- Volume: `pgdata`, `redisdata` (AOF bật), `media`, `private_media`, `asset_vault`, `backups`.
 - Backup: `pg_dump` hằng ngày 03:00 Asia/Ho_Chi_Minh, mã hóa bằng `age` (public key trên server, private key giữ offline), giữ 14 bản.
 - Staging và production là hai compose project riêng, DB riêng, secret riêng. Chỉ promote lên VPS khi toàn bộ AC local PASS.
 
@@ -182,14 +190,16 @@ Flutter: `lib/features/private/**` chỉ được import từ `lib/app/router.da
 | LLM | | ✔ |
 | TTS synthesize | | ✔ |
 | Phát TTS audio | ✔ | |
-| Quyết định core state + chọn asset | ✔ (Character Engine) | |
-| Chuẩn hóa emotion từ LLM thành cue hợp lệ | | ✔ (Character Director) |
+| Quyết định core state + chọn asset (Asset Policy Engine) | ✔ (Character Engine) | |
+| Chuẩn hóa emotion từ LLM thành cue hợp lệ + tính `stage_context` xác định | | ✔ (Character Director) |
+| Lưu owner asset policy (nguồn sự thật) | cache drift | ✔ `hana.asset_policy*`, `hana_private.private_asset_policy_overrides` |
+| Mã hóa vault asset cache | ✔ (AES-GCM, key `vault_asset_key` trong Keystore) | |
 | Tính giờ đến hạn reminder, recurrence | | ✔ (nguồn sự thật) |
 | Bắn notification đúng giờ | ✔ chính (local scheduled, không cần FCM) | ✔ dự phòng tùy chọn (FCM nếu đã cấu hình và thiết bị chưa ack) |
 | Lưu memory, journal, report, instruction | | ✔ |
 | Tạo report tháng | | ✔ |
 | Mã hóa private text at rest | | ✔ (AES-GCM app-level) |
-| Mã hóa private asset cache | ✔ (AES-GCM, key trong Keystore) | |
+| Mã hóa private_vault asset cache | ✔ (AES-GCM, key private trong Keystore, khác `vault_asset_key`) | |
 | Xác thực private PIN | | ✔ |
 | Private unlock bằng PIN 6 số (credential bắt buộc) | nhập PIN | ✔ xác minh argon2id |
 | Private unlock bằng biometric (tùy chọn) | ✔ BiometricPrompt mở khóa key Keystore, ký challenge | ✔ xác minh chữ ký với public key đã enroll bằng PIN |
@@ -209,8 +219,10 @@ Flutter: `lib/features/private/**` chỉ được import từ `lib/app/router.da
 | Private memories | ✔ (ciphertext) | ✘ (chỉ RAM khi xem trong private) | |
 | Tasks / reminders / occurrences | ✔ | drift cache occurrences 14 ngày tới | để local notification hoạt động offline |
 | Outbox (text chưa gửi) | — | drift | chỉ normal |
-| Normal app-ready videos + `normal_manifest.json` | ✘ | bundle APK | |
-| Private app-ready videos + `private_manifest.json` | ✔ `PRIVATE_MEDIA_ROOT` | cache mã hóa `app_support/prv_assets/` | runtime giải mã vào `cache/prv_rt/`, xóa khi khóa |
+| Asset `bundle` (chỉ `content_sensitivity=normal`) + `bundle_manifest.json` | ✘ | bundle APK | seed Phase 3.2: 0 video, chỉ `fallback.png` |
+| Asset `vault` + `vault_manifest.json` | ✔ `ASSET_VAULT_ROOT` | cache mã hóa `app_support/asset_vault/` | runtime giải mã vào `cache/vault_rt/` (normal) hoặc `cache/prv_rt/` (private); xóa khi logout (PRIVACY_SPEC §4.1) |
+| Asset `private_vault` + `private_vault_manifest.json` | ✔ `PRIVATE_MEDIA_ROOT/assets` | cache mã hóa `app_support/prv_assets/` | runtime giải mã vào `cache/prv_rt/`, xóa khi khóa |
+| Owner asset policy | ✔ `hana.asset_policy`, `hana.asset_policy_overrides`; `hana_private.private_asset_policy_overrides` | drift cache (chỉ normal); private overrides chỉ RAM | |
 | TTS audio normal | ✔ blob, TTL 7 ngày | stream, không cache disk | |
 | TTS audio private | ✔ blob private, TTL 1 giờ | stream, không cache disk | |
 | Voice input normal | ✔ blob, xóa sau 24h | file tạm, xóa ngay sau upload thành công | |
@@ -253,6 +265,7 @@ repo/
       domain/
         ai/            gateway.py protocol.py validator.py refs.py placeholders.py prompts/
         character/     director.py cues.py
+        assets/        policy.py (asset_policy + overrides service) policy_reader.py (chỉ cờ relationship cho Director) vault.py (phục vụ vault manifest/file)
         voice/         stt.py tts.py speech_normalizer.py segmenter.py
         conversation/  orchestrator.py context_builder.py action_executor.py
         memory/        service.py extractor.py retriever.py profile_reader.py summaries.py followups.py
@@ -275,18 +288,21 @@ repo/
   mobile/
     pubspec.yaml
     android/
-    assets/character/normal/     # sinh bởi asset pipeline, gitignored (trừ normal_manifest.json)
+    assets/character/bundle/     # sinh bởi asset pipeline, gitignored (trừ bundle_manifest.json, fallback.png); chỉ sensitivity=normal
     lib/
       app/        bootstrap.dart router.dart lifecycle.dart flavors.dart
       core/       api/ (dio client, sse client, error mapping) auth/ storage/ (drift, secure)
                   outbox/ time/ (server clock offset, business tz) notifications/ logging/
-      character/  engine/ (state, events, reducer, effects) manifest/ selector/ stage/ (VideoStage widget)
+      character/  engine/ (state, events, reducer, effects, stage_context) manifest/ (validator theo manifest_kind)
+                  policy/ (Asset Policy Engine thuần: eligibility, tier, main-loop/variant, fallback)
+                  vault/ (downloader, AES-GCM cache asset_vault, vault_rt) stage/ (VideoStage widget)
       features/
         chat/ voice/ reminders/ tasks/ journal/ reports/ instructions/ memory/ settings/ inbox/
         private/  session/ chat/ vault/ secure_window/ memory/
     test/
   tools/
-    asset_pipeline/  probe.py label_check.py transcode.py manifest.py verify.py publish_private.py
+    asset_pipeline/  probe.py label_check.py (schema v2 + coverage report) transcode.py manifest.py verify.py
+                     sync_bundle.py publish_vault.py publish_private.py
   infra/
     compose.dev.yml compose.prod.yml Caddyfile postgres/init/ (roles, extensions) backup/
 ```
@@ -418,7 +434,7 @@ data: {"turn_id":"…","seq":3,"ts":"…Z", …payload}
 | Instructions | `GET /v1/instructions`, `POST /v1/instructions/{id}/confirm|reject|pause|resume|revoke`, `PATCH /v1/instructions/{id}` | STANDING_INSTRUCTIONS_SPEC §9 |
 | Memories | `GET /v1/memories`, `POST /v1/memories`, `PATCH /v1/memories/{id}`, `DELETE /v1/memories/{id}`, `GET /v1/followups`, `PATCH /v1/followups/{id}` | MEMORY_SPEC §10 |
 | Notifications inbox | `GET /v1/notifications?after=<uuid7>&cursor=`, `POST /v1/notifications/{id}/read`, `POST /v1/notifications/{id}/displayed` (client đã hiện local notification, dedupe) | §8.6 |
-| Assets | `GET /v1/assets/normal-manifest/version` | CHARACTER_SYSTEM §4.5 |
+| Assets | `GET /v1/assets/manifest` (vault manifest, ETag), `GET /v1/assets/{asset_id}` \| `/poster` \| `/blur`, `GET/PATCH /v1/assets/policy`, `PUT/DELETE /v1/assets/policy/overrides/{asset_id}` | CHARACTER_SYSTEM §4.5, §17.3; PRIVACY_SPEC §4.1 |
 | Data control | `POST /v1/data/export` (job → media zip), `DELETE /v1/messages` (xóa lịch sử chat normal), `POST /v1/data/delete-all` (yêu cầu password), `POST /v1/devices/{device_id}/revoke` | PRIVACY_SPEC §9 |
 | Private | toàn bộ dưới `/v1/private/*` | PRIVACY_SPEC §5.9 |
 | Health | `GET /healthz` (process sống), `GET /readyz` (DB, Redis, 9Router `/api/health` hoặc `GET /v1/models`) | |
@@ -620,6 +636,8 @@ Endpoint: `POST /v1/action-executions/{id}/undo` → 200 `{status:"undone"}`; qu
 | memories, conversation_summaries, followups, relationship_state, memory_extraction_cursors, v_profile_memories | hana | MEMORY_SPEC §4 |
 | work_journal_entries, work_journal_entry_revisions, work_journal_items, work_reports | hana | WORK_JOURNAL_SPEC §8 |
 | standing_instructions, routine_schedules, routine_runs | hana | STANDING_INSTRUCTIONS_SPEC §8 |
+| asset_policy, asset_policy_overrides | hana | CHARACTER_SYSTEM §17.1–§17.2 |
+| private_asset_policy_overrides | hana_private | CHARACTER_SYSTEM §17.2 |
 | private_settings, private_biometric_keys, private_turns, private_messages, private_memories, private_summaries, private_extraction_cursors, private_media_objects, private_llm_calls, private_action_executions, private_audit_log | hana_private | PRIVACY_SPEC §6 |
 
 ---
@@ -881,7 +899,8 @@ loop mỗi 15 giây:
 | F13 | Thiết bị offline khi gửi | dio error | outbox retry | Bubble `queued` |
 | F14 | Mất kết nối SSE | stream đóng | reconnect `Last-Event-ID` sau 1s, 2s, 5s; quá 30s → `GET /v1/turns/{id}` | Không thấy nếu hồi phục |
 | F15 | Đồng hồ thiết bị lệch | so `X-Server-Time` | client dùng offset cho mọi hiển thị "bây giờ"; lệch > 5 phút → log + banner nhẹ | Banner nếu lệch lớn |
-| F16 | Asset hỏng / thiếu | sha256 lúc khởi động (lazy), lỗi decoder | loại asset khỏi pool phiên này, chọn variant khác → idle → poster | Không thấy (hoặc ảnh tĩnh) |
+| F16 | Asset hỏng / thiếu / pool rỗng theo policy | sha256 lúc khởi động (lazy), lỗi decoder, Asset Policy Engine trả rỗng | loại asset khỏi pool phiên này, chọn lại → fallback CHARACTER_SYSTEM §11.3 (idle(ctx) → daily → poster → silhouette); không bao giờ mượn asset không eligible | Không thấy (hoặc ảnh tĩnh) |
+| F23 | Vault chưa tải / server asset không truy cập được / vault manifest vi phạm `manifest_kind` | downloader lỗi, validator | stage silhouette/poster, tải nền khi có mạng (`AssetReady`); manifest vi phạm bị từ chối toàn bộ, log critical; chat không bị ảnh hưởng | Stage ảnh tĩnh; Cài đặt → Nhân vật & hình ảnh hiện tiến độ tải |
 | F17 | Private session hết hạn giữa turn | 401 `PRIVATE_SESSION_EXPIRED` | turn vẫn hoàn tất phía server trong private schema; client khóa private, xóa RAM | Màn hình khóa private |
 | F18 | App bị kill trong private mode | lần khởi động sau | xóa `cache/prv_rt/`, khởi động normal mode | Không thấy nội dung private |
 | F19 | Scheduler down nhiều giờ | khởi động lại | catch-up: reminder trễ ≤ 6h push kèm "(trễ)"; > 6h `missed`; routine report luôn chạy bù | Inbox |
@@ -901,7 +920,7 @@ Failure mode chuyên biệt: CHARACTER_SYSTEM §14, VOICE_SPEC §11, MEMORY_SPEC
 | INV-02 | LLM và backend không bao giờ gửi/quyết định filename, path, asset_id, URL video. Character Engine chỉ nhận `CharacterCue` (enum). | JSON schema envelope, test fuzz, client parser chỉ nhận enum |
 | INV-03 | Mọi video app-ready có 0 audio stream; player volume = 0 và `mixWithOthers=true`. Giọng Hana chỉ từ TTS. | `verify.py` fail build, unit test manifest, widget test |
 | INV-04 | Code path normal không đọc/ghi dữ liệu private. | DB role grants, import-linter, router tách, test integration |
-| INV-05 | Private asset không có trong APK, không có trong normal manifest, chỉ tải qua private session. | build check quét APK, test |
+| INV-05 | (Sửa Phase 3.2) Asset `content_sensitivity ≥ suggestive` không bao giờ nằm trong APK/AAB (APK chỉ chứa `bundle` = `normal`). Asset `delivery=private_vault` không có trong bundle/vault manifest, chỉ tải qua private session. Normal engine không load private_vault manifest. | build check quét APK, validator `manifest_kind`, test ISO-08/09/27 |
 | INV-06 | Không notification (push/local/inbox) nào được tạo từ private mode hoặc chứa nội dung private. | không có code path; action private không có loại notification; test |
 | INV-07 | Private mode chỉ mở bằng thao tác UI chủ động + PIN server xác minh. LLM, scheduler, notification, deep link không mở được. App luôn khởi động ở normal mode. | router guard, test |
 | INV-08 | LLM không ghi DB trực tiếp; mọi side effect qua action đã validate bởi domain service. | kiến trúc orchestrator, test |
@@ -913,10 +932,12 @@ Failure mode chuyên biệt: CHARACTER_SYSTEM §14, VOICE_SPEC §11, MEMORY_SPEC
 | INV-14 | Secrets không ở thiết bị, không trong repo, không trong log. | gitignore, redaction, CI secret scan |
 | INV-15 | Nội dung private không log, không vào audit normal, mã hóa at rest (AES-GCM). | crypto layer, logger private, test |
 | INV-16 | `assets_source` bất biến; pipeline chỉ đọc. | pipeline mở file read-only, checksum trước/sau |
-| INV-17 | Asset chưa gắn nhãn hoặc nhãn không chắc chắn bị loại (fail-closed). | `label_check.py` |
-| INV-18 | Video stage không bao giờ trống: fallback variant → idle → poster. | engine test |
+| INV-17 | (Sửa Phase 3.2) File nguồn không có nhãn hợp lệ bị loại; thiếu `content_sensitivity` / `allowed_modes` → fail-closed `private` / `[private]`; `hard_block` không bao giờ publish. `review_flag`, `technical_quality=poor`, `excluded_by_default` **không** loại asset khỏi thư viện. | `label_check.py`, pipeline test |
+| INV-18 | (Sửa Phase 3.2) Video stage không bao giờ trống: state(ctx) → idle(ctx) → state/idle(daily) (assistant, relationship) → poster → silhouette. Thiếu coverage không fail build; fallback không mượn asset không eligible cho context. | engine test, `label_check` exit 0 khi coverage thiếu |
 | INV-19 | Ngày nghiệp vụ là `date` tên `*_local_date`; giờ tường là `timestamp` không tz tên `*_local` + cột `tz`. | review migration, test schema |
 | INV-20 | Thời gian/ngày của kết quả action trong reply do backend render (placeholder), không do LLM viết tự do. | AI_PROTOCOL §6, test |
+| INV-21 | (Mới Phase 3.2) Quyền hiển thị asset chỉ do Asset Policy Engine trên client quyết định từ manifest đã verify + owner asset policy + `stage_context`. LLM không thấy/chọn/biết asset_id, filename, `content_sensitivity`, `allowed_modes`, `stage_context`; không action LLM nào đọc/ghi owner asset policy; Director tính `stage_context` xác định. | import-linter (`domain/ai`, `domain/conversation` ✗ `domain/assets`), AIP-06, AC-CHAT-11, AC-AI-13 |
+| INV-22 | (Mới Phase 3.2) StageContext `private` chỉ tồn tại trong private engine; normal engine không bao giờ chọn asset theo `private`. Với `daily`/`assistant`, asset được chọn luôn thuộc tier `content_sensitivity` thấp nhất của pool; `relationship` chỉ khi owner bật. | engine property test (CHR-04, CHR-07), ISO-28, AC-AST-04/05/07 |
 
 ---
 
@@ -950,6 +971,7 @@ Failure mode chuyên biệt: CHARACTER_SYSTEM §14, VOICE_SPEC §11, MEMORY_SPEC
 | `PRIVATE_PIN_REQUIRED` | 403 | no | biometric không được phép lúc này; dùng PIN (PRIVACY_SPEC §5.2.3) |
 | `PRIVATE_BIOMETRIC_INVALID` | 401 | no | chữ ký/challenge không hợp lệ |
 | `PRIVATE_LOCKED_OUT` | 423 | yes | `Retry-After` |
+| `ASSET_POLICY_CONFIRM_REQUIRED` | 422 | no | override thêm `daily`/`assistant` cho asset sensitivity ≥ suggestive cần `confirm_sensitive=true` (CHARACTER_SYSTEM §17.3) |
 | `NOT_FOUND` | 404 | no | |
 | `CONFLICT` | 409 | no | |
 
@@ -987,6 +1009,7 @@ Failure mode chuyên biệt: CHARACTER_SYSTEM §14, VOICE_SPEC §11, MEMORY_SPEC
 | `PRIVATE_MODE_ENABLED` | | `false` | api |
 | `FCM_ENABLED`, `FCM_SERVICE_ACCOUNT_FILE` | không (tùy chọn ở mọi môi trường) | `false` | worker |
 | `MEDIA_ROOT`, `PRIVATE_MEDIA_ROOT` | ✔ | `/data/media`, `/data/private_media` | api, worker, worker_private |
+| `ASSET_VAULT_ROOT` | ✔ | `/data/asset_vault` (volume `asset_vault`, không static route) | api |
 | `LLM_PROMPT_LOGGING` | | `false` | worker |
 | `LOG_LEVEL` | | `INFO` | all |
 

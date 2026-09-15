@@ -1,7 +1,7 @@
 # HANA — AI PROTOCOL
 
-Phiên bản: 1.1 (Phase 1 + Final Decision Patch) · Vị trí canonical: `repo/docs/` · Quyết định chốt: ARCHITECTURE §0.1
-Phụ thuộc: `ARCHITECTURE.md` (C5, C7, C8, §9, INV-02, INV-08, INV-13, INV-20), `CHARACTER_SYSTEM.md` §6, `TIMEZONE_SPEC.md` §8, `MEMORY_SPEC.md` §6–§7, `WORK_JOURNAL_SPEC.md` §4–§6, `STANDING_INSTRUCTIONS_SPEC.md` §5, `PRIVACY_SPEC.md` §5.7.
+Phiên bản: 1.2 (Phase 1 + Final Decision Patch + Phase 3.2 Asset Policy Patch) · Vị trí canonical: `repo/docs/` · Quyết định chốt: ARCHITECTURE §0.1
+Phụ thuộc: `ARCHITECTURE.md` (C5, C7, C8, §9, INV-02, INV-08, INV-13, INV-20, INV-21), `CHARACTER_SYSTEM.md` §6, §8.5, §17, `TIMEZONE_SPEC.md` §8, `MEMORY_SPEC.md` §6–§7, `WORK_JOURNAL_SPEC.md` §4–§6, `STANDING_INSTRUCTIONS_SPEC.md` §5, `PRIVACY_SPEC.md` §5.7.
 
 ---
 
@@ -9,9 +9,9 @@ Phụ thuộc: `ARCHITECTURE.md` (C5, C7, C8, §9, INV-02, INV-08, INV-13, INV-2
 
 1. **LLM đề xuất, backend quyết định.** Output LLM là dữ liệu untrusted, qua validate nhiều lớp trước khi tạo side effect (INV-08).
 2. **Một envelope JSON có schema cố định** cho mỗi purpose. Không dùng native tool-calling (không phụ thuộc khả năng provider sau 9Router).
-3. **LLM không thấy UUID, filename, asset_id, URL.** Thực thể được tham chiếu bằng *ref alias* ngắn theo turn (`R1`, `T2`, …) (§4.4).
+3. **LLM không thấy UUID, filename, asset_id, URL, hay metadata asset** (`content_sensitivity`, `allowed_modes`, `delivery`, `review_flag`, owner asset policy, `stage_context`). Thực thể được tham chiếu bằng *ref alias* ngắn theo turn (`R1`, `T2`, …) (§4.4).
 4. **LLM không viết thời gian của kết quả action.** Dùng placeholder do backend render (INV-20, §6).
-5. **LLM chỉ chọn emotion/intensity/special_cue semantic** (INV-02).
+5. **LLM chỉ chọn emotion/intensity/special_cue semantic** (INV-02, INV-21). LLM không chọn `stage_context`, không chọn asset, không đổi được owner asset policy; Character Director tính `stage_context` xác định (CHARACTER_SYSTEM §8.5) và Character Engine trên client chọn asset (CHARACTER_SYSTEM §11). Prompt không mô tả hình ảnh đang hiển thị.
 6. **Mọi thời gian LLM nhận và trả là giờ tường Asia/Ho_Chi_Minh**, không bao giờ UTC (TIMEZONE_SPEC §8).
 7. Private mode dùng model, prompt, action set, cue set và context riêng (§11).
 
@@ -192,6 +192,8 @@ F1 Hỏi thăm lịch khám răng của anh (2026-09-15)
 <allowed_special_cues>celebrate, comfort</allowed_special_cues>
 ```
 
+`<allowed_special_cues>` (normal) = cue trong `normal_cues.json` có `llm_selectable = true` và `allowed_modes ∩ {daily, assistant} ≠ ∅`, cộng cue có `relationship ∈ allowed_modes` nếu owner bật `relationship_stage_enabled` (CHARACTER_SYSTEM §4.5, §17.1). Chỉ tên cue (trung tính) được đưa vào; không kèm `allowed_modes`, số asset, hay mô tả hình ảnh. Không section nào của context block chứa asset_id (`chr_\d{3}`), tên file nguồn, `content_sensitivity`, `allowed_modes`, `stage_context`, hay cài đặt owner asset policy.
+
 ### 4.3 Giới hạn kích thước (đếm ký tự, không phụ thuộc tokenizer)
 
 | Phần | Giới hạn |
@@ -271,9 +273,10 @@ Mặc định mềm (không coi là invalid): `special_cue` thiếu → `null`; 
 
 ### 5.3 Special cue
 
-- Chỉ chọn từ `<allowed_special_cues>` (danh sách `llm_selectable` của mode, CHARACTER_SYSTEM §4.4). Không có danh sách → luôn `null`.
+- Chỉ chọn từ `<allowed_special_cues>` (§4.2; danh sách `llm_selectable` lọc theo `allowed_modes`, CHARACTER_SYSTEM §4.4). Không có danh sách → luôn `null`.
 - Tối đa 1; chỉ dùng khi thật sự phù hợp (hướng dẫn: ≤ 1 trong 10 turn).
-- Cue không hợp lệ → Director đặt `null` (không làm invalid envelope).
+- Cue không hợp lệ, hoặc hợp lệ nhưng không thuộc `allowed_modes` của `stage_context` mà Director tính cho turn → Director đặt `null` (không làm invalid envelope).
+- Envelope không có field `stage_context`, `asset_id` hay tương đương; field thừa ở top-level bị bỏ qua (§5.1) và không bao giờ được chuyển tiếp tới client.
 
 ---
 
@@ -402,7 +405,11 @@ settings.update:
        "quiet_hours_start_local" | "quiet_hours_end_local" |
        "journal_day_cutoff_local" | "notification_preview"
   value: string | boolean          # validate theo kiểu của key
+  # KHÔNG có key nào thuộc owner asset policy (relationship_stage_enabled, relationship_trigger,
+  # stage_discreet, stage_secure_window, override theo asset). Key ngoài danh sách → ACTION_INVALID.
 ```
+
+Không có action nào đọc/ghi owner asset policy, manifest, hay chọn asset (INV-21). Người dùng yêu cầu qua chat (vd "cho em hiện clip khác đi") → Hana hướng dẫn vào Cài đặt → "Nhân vật & hình ảnh", không tạo action.
 
 ### 7.3 Validate & thực thi
 
@@ -580,7 +587,8 @@ Khác biệt so với `chat_turn`:
 | Context | `now`, `turn`, relationship (read-only normal), profile_memories (tối đa 10, chỉ category `profile`, `preference` — không `people`, `health`, `work`), `private_memories` (PM refs, tối đa 8), private recent summaries (2), lịch sử private (≤ 30) |
 | Không có | standing_instructions, tasks, reminders, journal, followups, normal relevant_memories, normal lịch sử chat |
 | allowed_actions | `memory.remember`, `memory.forget` (scope private) |
-| allowed_special_cues | `llm_selectable` của registry normal ∪ private |
+| allowed_special_cues | cue `llm_selectable` có `private ∈ allowed_modes` (từ `private_cues.json`); chỉ tên cue, không metadata asset |
+| stage_context | Director luôn đặt `private`; LLM không chọn |
 | Envelope | cùng schema §5.1 |
 | Fallback | template riêng không nhắc nội dung (vd "Em đang bị chậm một chút, anh nhắn lại nha.") |
 | Log | `private_llm_calls` |
@@ -666,6 +674,7 @@ INV-02, INV-04, INV-08, INV-13, INV-20, cộng:
 | AIP-03 | Private purpose chỉ chạy trong `worker_private` với `LLM_MODEL_PRIVATE`. |
 | AIP-04 | Assistant message không bao giờ chứa chuỗi `{{` sau render. |
 | AIP-05 | LLM không bao giờ nhận UUID nội bộ (test: quét prompt bằng regex UUID phải rỗng). |
+| AIP-06 | Prompt (mọi purpose, cả hai zone) không chứa asset_id (`chr_\d{3}`), tên file nguồn (`[A-Z]{4}\d{4}`), `content_sensitivity`, `allowed_modes`, `stage_context`, hay giá trị owner asset policy; output LLM không bao giờ quyết định asset hay stage context (INV-21). |
 
 ---
 
@@ -674,6 +683,8 @@ INV-02, INV-04, INV-08, INV-13, INV-20, cộng:
 - Golden test cho mỗi ví dụ §12 với `FakeChatGateway`.
 - Fuzz envelope: JSON hỏng, field thiếu, enum lạ, action type lạ, args sai kiểu, ref lạ, 6 action → không exception, không side effect ngoài spec.
 - Test placeholder: index sai, field sai, action rejected → reply_repair được gọi.
-- Test prompt builder: không UUID, không filename/asset path, `now` đúng giờ Việt Nam, private context không chứa dữ liệu normal ngoài danh sách cho phép (§11).
+- Test prompt builder: không UUID, không filename/asset path, không asset_id `chr_\d{3}`, không token metadata asset (AIP-06), `now` đúng giờ Việt Nam, private context không chứa dữ liệu normal ngoài danh sách cho phép (§11).
+- Test `<allowed_special_cues>`: relationship tắt → không có cue chỉ-relationship; bật → có; cue không cho phép context turn → Director đặt `null`.
+- Test `settings.update` với key owner asset policy → `ACTION_INVALID`, `asset_policy` không đổi; import-linter: `domain/ai`, `domain/conversation` không import `domain/assets`.
 - Test JSON mode auto-disable khi gateway trả 400 `response_format`.
 - Contract test tùy chọn (`-m live_9router`) với 9Router local: chat JSON, STT, TTS.

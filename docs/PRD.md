@@ -1,6 +1,6 @@
 # HANA — PRODUCT REQUIREMENTS DOCUMENT
 
-Phiên bản: 1.1 (Phase 1 + Final Decision Patch)
+Phiên bản: 1.2 (Phase 1 + Final Decision Patch + Phase 3.2 Asset Policy Patch)
 Ngày: 2026-09-15
 Chủ sở hữu tài liệu: Lead Architect
 Trạng thái: CHỐT phạm vi v1
@@ -42,10 +42,10 @@ Hai giá trị cốt lõi phải cùng tồn tại:
 | Tính cách | Ấm áp, tinh tế, hơi tinh nghịch, chu đáo; làm việc gọn gàng, đáng tin |
 | Xưng hô | Mặc định Hana xưng "em", gọi người dùng "anh" (chỉnh được) |
 | Giọng nói | Một giọng TTS nhất quán cho mọi mode |
-| Hình ảnh | Chỉ dùng video có sẵn; 10 trạng thái core + special videos |
+| Hình ảnh | Chỉ dùng video có sẵn — toàn bộ **43 video nguồn** là animation library (Phase 3.2); 10 trạng thái core (được dùng chung asset pool) + special videos; asset nào hiện ở ngữ cảnh nào do **owner asset policy** quyết định (`content_sensitivity` × `allowed_modes`) |
 | Trung thực | Thừa nhận là AI khi được hỏi nghiêm túc; không nói đã làm việc gì khi chưa làm |
 | Lành mạnh | Không thao túng, không trách móc khi người dùng vắng, khuyến khích nghỉ ngơi và đời sống thật |
-| Giới hạn | Normal mode không nội dung tình dục tường minh; private mode có giới hạn tuyệt đối (PRIVACY_SPEC §10) |
+| Giới hạn | **Lời nói/văn bản**: normal mode không nội dung tình dục tường minh; private mode có giới hạn tuyệt đối (PRIVACY_SPEC §10). **Hình ảnh**: theo owner asset policy (ứng dụng cá nhân); giới hạn tuyệt đối §10.1 áp dụng cho mọi asset (`hard_block`) |
 
 ---
 
@@ -54,7 +54,7 @@ Hai giá trị cốt lõi phải cùng tồn tại:
 ### 4.1 Mục tiêu
 
 - G1. Trò chuyện text và voice push-to-talk tự nhiên, có TTS.
-- G2. Nhân vật video phản ứng đúng ngữ cảnh với 10 trạng thái core và special videos, không bao giờ phát âm thanh video.
+- G2. Nhân vật video phản ứng đúng ngữ cảnh với 10 trạng thái core và special videos, dùng toàn bộ 43 video nguồn theo owner asset policy (daily/assistant ưu tiên clip ít nhạy cảm nhất; relationship/private dùng rộng hơn khi owner cho phép), không bao giờ phát âm thanh video.
 - G3. Trí nhớ dài hạn minh bạch, người dùng kiểm soát được.
 - G4. Trợ lý: task, reminder đúng giờ Việt Nam, kể cả khi mất mạng.
 - G5. Work journal hằng ngày + báo cáo tháng theo kỳ half-open `[ngày 15 tháng trước, ngày 15 tháng này)` ("từ ngày 15 tháng trước đến hết ngày 14 tháng này") chính xác, có trích dẫn, không ngày nào thuộc hai kỳ.
@@ -75,7 +75,7 @@ Hai giá trị cốt lõi phải cùng tồn tại:
 | NG7 | Lịch âm | Sau v1 |
 | NG8 | Export PDF báo cáo | Markdown đủ cho v1 |
 | NG9 | Export dữ liệu private | Giảm bề mặt rò rỉ |
-| NG10 | Hot-update asset video qua mạng (normal) | Asset bundle theo bản build |
+| NG10 | Nguồn asset ngoài pipeline (tải/sinh asset tùy ý, chỉnh asset trên thiết bị) | Thư viện chỉ gồm asset do asset pipeline publish (bundle trong APK; vault/private_vault republish từ pipeline) |
 | NG11 | Routine định kỳ tùy ý (ngoài `work_report`, `journal_nudge`) | Tập đóng để kiểm soát chất lượng |
 | NG12 | Khóa toàn app bằng PIN | Dựa vào khóa thiết bị; private có PIN riêng |
 
@@ -90,7 +90,7 @@ Hai giá trị cốt lõi phải cùng tồn tại:
 | F-01 | Chat text | P0 | ARCHITECTURE §8.1, AI_PROTOCOL |
 | F-02 | Voice push-to-talk + STT | P0 | VOICE_SPEC §3–§5 |
 | F-03 | TTS giọng Hana | P0 | VOICE_SPEC §6–§8 |
-| F-04 | Character stage — 10 core states | P0 | CHARACTER_SYSTEM |
+| F-04 | Character stage — 10 core states, 43 video, stage context daily/assistant/relationship/private | P0 | CHARACTER_SYSTEM §2, §8.5, §11 |
 | F-05 | Special videos | P0 | CHARACTER_SYSTEM §10 |
 | F-06 | Private/adult mode | P0 | PRIVACY_SPEC §5 |
 | F-07 | Memory dài hạn + UI quản lý | P0 | MEMORY_SPEC |
@@ -105,6 +105,8 @@ Hai giá trị cốt lõi phải cùng tồn tại:
 | F-16 | Export dữ liệu normal | P1 | PRIVACY_SPEC §9 |
 | F-17 | Hoàn tác action 30 giây | P0 | AI_PROTOCOL §7.4 |
 | F-18 | Semantic memory retrieval (embeddings) | P1 | MEMORY_SPEC §7.4 |
+| F-19 | Owner asset policy — cài đặt toàn cục (relationship visuals, trigger, stage kín đáo, chặn chụp màn hình) + API override theo asset | P0 | CHARACTER_SYSTEM §17 |
+| F-20 | Màn thư viện asset (danh sách `chr_nnn` + poster mờ, bật/tắt, `allowed_modes`, trọng số) | P1 | CHARACTER_SYSTEM §17.2 |
 
 ### F-01 Chat text
 
@@ -127,19 +129,24 @@ Hai giá trị cốt lõi phải cùng tồn tại:
 
 ### F-04 Character stage
 
-- 10 trạng thái: `idle, listening, talking, thinking, happy, shy, surprised, concerned, working, sleep`.
-- Chuyển trạng thái mượt (crossfade), không màn hình đen, không lặp một clip nhàm chán.
-- LLM chỉ gợi ý cảm xúc; app quyết định clip.
+- 10 trạng thái: `idle, listening, talking, thinking, happy, shy, surprised, concerned, working, sleep`. Không bắt buộc mỗi trạng thái có clip riêng; nhiều trạng thái dùng chung một nhóm clip; thiếu clip thì dùng clip nền/ảnh tĩnh, không bao giờ màn hình đen.
+- Toàn bộ 43 video nguồn là thư viện. Mỗi clip có **mức nhạy cảm** (`normal | suggestive | private`) và **ngữ cảnh được phép** (`daily | assistant | relationship | private`).
+- Ngữ cảnh: `daily` (mặc định), `assistant` (khi Hana làm việc: nhắc, nhật ký, báo cáo), `relationship` (trò chuyện tình cảm — chỉ khi chủ sở hữu bật), `private` (chỉ trong chế độ riêng tư).
+- Daily/assistant luôn ưu tiên clip ít nhạy cảm nhất trong thư viện; relationship/private dùng rộng hơn theo cài đặt của chủ sở hữu.
+- Clip lỗi kỹ thuật (jump-cut) được giữ nhưng tắt mặc định; clip cần duyệt được dùng với tần suất thấp, không làm vòng lặp chính. Chủ sở hữu bật/tắt được.
+- Chuyển trạng thái mượt (crossfade), không lặp một clip nhàm chán.
+- LLM chỉ gợi ý cảm xúc; app quyết định clip. LLM không biết clip nào đang hiện.
 
 ### F-05 Special videos
 
 - Clip đặc biệt gắn "cue" ngữ nghĩa (vd chào buổi sáng, ăn mừng khi báo cáo xong).
-- Có cooldown, tôn trọng giờ yên lặng, tách normal/private.
+- Có cooldown, tôn trọng giờ yên lặng, mỗi cue có danh sách ngữ cảnh được phép.
 
 ### F-06 Private mode
 
 - Chỉ mở chủ động từ Cài đặt. **PIN 6 số là credential bắt buộc và luôn là fallback**; mở khóa bằng vân tay/khuôn mặt là **tùy chọn tiện lợi** (bật sau khi nhập PIN, định kỳ 72 giờ phải nhập lại PIN), không bao giờ là cách mở duy nhất. Không bao giờ được Hana gợi ý.
-- Lịch sử, ký ức, asset, giọng nói private tách biệt; không notification; chặn screenshot; tự khóa khi rời app.
+- Lịch sử, ký ức, clip chỉ-riêng-tư (`private_vault`), cài đặt clip riêng tư, giọng nói private tách biệt; không notification; chặn screenshot; tự khóa khi rời app.
+- Stage private dùng ngữ cảnh `private`: mọi clip được phép `private` (kể cả clip cũng dùng ở chế độ thường). Việc một clip nhạy cảm hiện ở chế độ thường là cài đặt hình ảnh của chủ sở hữu, không phải rò rỉ dữ liệu private.
 - Không có nhắc việc/nhật ký/chỉ thị trong private.
 
 ### F-07 Memory
@@ -221,6 +228,8 @@ Thêm
  ├─ Ký ức (theo nhóm, việc dang dở, cách xưng hô)
  ├─ Cài đặt
  │   ├─ Giọng nói · Hana chủ động nhắn · Giờ yên lặng · Nhật ký (mốc giờ)
+ │   ├─ Nhân vật & hình ảnh (hình ảnh tình cảm bật/tắt + cách kích hoạt, stage kín đáo,
+ │   │   chặn chụp màn hình, thư viện clip [P1], tải thư viện clip)
  │   ├─ Thông báo (preview) · Thiết bị
  │   ├─ Dữ liệu (xuất, xóa lịch sử, xóa tất cả)
  │   └─ Chế độ riêng tư (thiết lập / mở)
@@ -244,7 +253,7 @@ Private (route riêng, thay thế toàn bộ stack khi mở)
 3. Chọn cách xưng hô (mặc định anh/em).
 4. Cho phép notification; giải thích và xin quyền exact alarm (Android).
 5. Xem/chỉnh các mặc định: chào buổi sáng 08:00, hỏi lại việc dang dở 14:00, hỏi thăm tối 21:30, quiet hours 23:00–07:00, cutoff ngày nhật ký 04:00.
-6. Vào Home; không nhắc gì đến private mode.
+6. Vào Home; không nhắc gì đến private mode. Stage hiện silhouette trong lúc app tải thư viện clip (vault) ở nền; tải xong thì Hana chuyển sang video (`daily`). Tùy chọn hình ảnh tình cảm mặc định tắt, bật trong Cài đặt → Nhân vật & hình ảnh.
 
 ### J2 — Trò chuyện và đặt nhắc bằng voice
 
@@ -270,7 +279,7 @@ Private (route riêng, thay thế toàn bộ stack khi mở)
 ### J5 — Private mode
 
 1. Cài đặt → Chế độ riêng tư → Mở → nhập PIN 6 số (hoặc, nếu người dùng đã tự bật, quét vân tay — luôn có nút "Dùng PIN").
-2. Màn private (nhãn "Riêng tư", không chụp màn hình được), lịch sử private riêng, clip private.
+2. Màn private (nhãn "Riêng tư", không chụp màn hình được), lịch sử private riêng; stage dùng ngữ cảnh `private` — mọi clip có `private` trong ngữ cảnh được phép (seed: 41 clip, 2 clip lỗi kỹ thuật tắt mặc định).
 3. Người dùng chuyển sang app khác 2 phút → quay lại: màn khóa; cần mở khóa lại (PIN, hoặc biometric nếu đã bật và chưa quá 72 giờ kể từ lần nhập PIN gần nhất).
 4. Ra normal: Hana normal không biết gì về cuộc trò chuyện private; không notification nào về private.
 
@@ -316,7 +325,8 @@ Private (route riêng, thay thế toàn bộ stack khi mở)
 
 | # | Giả định / ràng buộc |
 |---|---|
-| A1 | 43 video trong `assets_source` đủ để phủ 10 core state normal sau khi gắn nhãn (cần xác minh ở phase phân tích asset) |
+| A1 | (Cập nhật Phase 3.2) 43 video trong `assets_source` đều có `content_sensitivity ≥ suggestive` (Phase 3: 0 clip trang phục thường ngày). Chủ sở hữu chấp nhận dùng cả 43 theo owner asset policy; daily/assistant hiện có 15 clip (nhóm A, sensitivity `suggestive` provisional), coverage không đủ cho mọi state (`surprised`, `concerned`, `working`, `sleep`) và dựa vào fallback. Bổ sung clip trang phục thường ngày sau này chỉ cần gắn nhãn `normal` rồi publish, không đổi kiến trúc |
+| A7 | Ứng dụng cá nhân: chủ sở hữu là người duy nhất xem stage; quyết định hiển thị asset nhạy cảm ở normal zone là của chủ sở hữu và có thể đổi bất kỳ lúc nào trong Cài đặt |
 | A2 | 9Router cung cấp được model chat, STT tiếng Việt, TTS tiếng Việt chất lượng chấp nhận được qua endpoint OpenAI-compatible. **Provider STT/TTS: UNRESOLVED**, benchmark ở voice phase |
 | A3 | Có một model/route qua 9Router cho phép nội dung người lớn hư cấu cho private mode. **Provider private LLM: UNRESOLVED**, benchmark ở private mode phase |
 | A4 | FCM là **tùy chọn**: không có Firebase project thì push tắt, reminder cục bộ vẫn hoạt động đầy đủ, tin Hana/báo cáo đến qua đồng bộ nền |
@@ -331,7 +341,7 @@ Private (route riêng, thay thế toàn bộ stack khi mở)
 |---|---|
 | 1 | Tài liệu nền (phase này) |
 | 2 | Scaffolding repo + infra local (compose, DB roles, migrations khung, Flutter khung, CI lint) |
-| 3 | Asset analysis + gắn nhãn + pipeline mute + manifest |
+| 3 | Asset analysis + phân loại thị giác (Phase 3) + asset policy patch (Phase 3.2: dùng cả 43 video); gắn nhãn `labels.yaml` v2 + pipeline mute + manifest bundle/vault/private_vault (việc để lại: `PHASE_3_2_ASSET_POLICY_PATCH.md` §11) |
 | 4 | Backend core: auth, turns, AI protocol, Character Director, SSE |
 | 5 | Flutter core: chat, Character Engine, VideoStage |
 | 6 | Voice: PTT, STT, TTS |

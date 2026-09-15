@@ -1,7 +1,7 @@
 # HANA — PRIVACY & PRIVATE MODE SPEC
 
-Phiên bản: 1.1 (Phase 1 + Final Decision Patch) · Vị trí canonical: `repo/docs/` · Quyết định chốt: ARCHITECTURE §0.1
-Phụ thuộc: `ARCHITECTURE.md` §2.3, §4, §7.1, §10, §11, §13; `CHARACTER_SYSTEM.md` §4.6, §13; `AI_PROTOCOL.md` §3, §11; `VOICE_SPEC.md` §10; `MEMORY_SPEC.md` §3, §7.5.
+Phiên bản: 1.2 (Phase 1 + Final Decision Patch + Phase 3.2 Asset Policy Patch) · Vị trí canonical: `repo/docs/` · Quyết định chốt: ARCHITECTURE §0.1
+Phụ thuộc: `ARCHITECTURE.md` §2.3, §4, §7.1, §10, §11, §13; `CHARACTER_SYSTEM.md` §2.5–§2.7, §4.6, §13, §17; `AI_PROTOCOL.md` §3, §11; `VOICE_SPEC.md` §10; `MEMORY_SPEC.md` §3, §7.5; `PHASE_3_2_ASSET_POLICY_PATCH.md`.
 
 ---
 
@@ -9,7 +9,8 @@ Phụ thuộc: `ARCHITECTURE.md` §2.3, §4, §7.1, §10, §11, §13; `CHARACTER
 
 1. **Private mode là một vùng cách ly**, không phải một "cờ" trên dữ liệu chung. Cách ly ở mọi tầng: route, process, DB schema + role, Redis DB, queue, blob root, model LLM, prompt, cache thiết bị, Character Engine instance.
 2. **Chỉ mở chủ động**: thao tác UI + PIN do server xác minh. Không gì khác mở được (INV-07).
-3. **Rò rỉ một chiều bị cấm tuyệt đối**: private → normal không được có asset, lịch sử, notification, memory, dấu vết sử dụng (INV-04, INV-05, INV-06).
+3. **Rò rỉ một chiều bị cấm tuyệt đối**: private → normal không được có asset `private_vault`, lịch sử, notification, memory, dấu vết sử dụng (INV-04, INV-05, INV-06).
+3a. **Hình ảnh là owner policy, không phải rò rỉ** (D8): `content_sensitivity` của asset (`normal|suggestive|private`) quyết định cách phân phối và bảo vệ; việc asset có nhãn `private` được hiển thị ở normal zone (`daily`/`assistant`/`relationship`) là quyết định của owner qua `allowed_modes` + Owner Asset Policy (CHARACTER_SYSTEM §17). Điều này không nới bất kỳ cách ly **dữ liệu** private nào ở tài liệu này.
 4. **Chiều ngược lại có giới hạn**: private được đọc read-only một tập nhỏ dữ liệu normal (profile, preference, cách xưng hô) để Hana vẫn là Hana.
 5. **Tối thiểu hóa dữ liệu**: không lưu private trên disk thiết bị (trừ asset cache mã hóa), mã hóa private at rest trên server, xóa audio sớm, không log nội dung.
 6. **Fail-closed**: nghi ngờ → khóa private, loại asset, từ chối request.
@@ -20,10 +21,11 @@ Phụ thuộc: `ARCHITECTURE.md` §2.3, §4, §7.1, §10, §11, §13; `CHARACTER
 
 | Lớp | Mô tả | Ví dụ | Bảo vệ |
 |---|---|---|---|
-| D0 | Công khai / kỹ thuật | app version, manifest normal | — |
-| D1 | Cá nhân normal | chat, tasks, reminders, settings | TLS, auth, DB không public |
+| D0 | Công khai / kỹ thuật | app version, bundle manifest, silhouette fallback | — |
+| D1 | Cá nhân normal | chat, tasks, reminders, settings, owner asset policy | TLS, auth, DB không public |
 | D2 | Nhạy cảm normal | memories, journal, reports, voice input | D1 + redaction log + xóa audio 24h |
-| D3 | Private | private messages, private memories, private summaries, private assets, private TTS/voice | cách ly §6 + mã hóa app-level + không disk thiết bị + không log + không notification |
+| D2V | Asset nhạy cảm normal zone | asset `delivery=vault` (`content_sensitivity ≥ suggestive`), poster/blur của chúng, vault manifest | không trong APK + JWT + cache mã hóa AES-GCM + FLAG_SECURE `auto` + xóa khi logout (§4.1) |
+| D3 | Private | private messages, private memories, private summaries, asset `delivery=private_vault`, private asset overrides, private TTS/voice | cách ly §6 + mã hóa app-level + không disk thiết bị + không log + không notification |
 | DS | Secret | password hash, PIN hash, JWT secret, provider keys, private data key | env server / Keystore; không log, không repo |
 
 ---
@@ -37,7 +39,7 @@ Phụ thuộc: `ARCHITECTURE.md` §2.3, §4, §7.1, §10, §11, §13; `CHARACTER
 | T3 | Notification lộ nội dung private trên lock screen | D3 | Không tồn tại đường tạo notification từ private; worker private không có FCM credential |
 | T4 | Người khác nhìn màn hình / recents / screenshot | D3 | FLAG_SECURE, privacy overlay khi inactive, khóa khi background > 60 s |
 | T5 | Mất điện thoại đang mở khóa | D3 | PIN private bắt buộc; biometric chỉ Class 3, tùy chọn, key vô hiệu khi đổi sinh trắc học, bắt nhập lại PIN sau 72 giờ; session ngắn, khóa khi idle |
-| T6 | Trích xuất APK / backup Android | D3 asset | Private asset không trong APK; `allowBackup=false`; cache private mã hóa |
+| T6 | Trích xuất APK / backup Android | D2V, D3 asset | Không asset `content_sensitivity ≥ suggestive` nào trong APK (chỉ `bundle` = `normal`); `allowBackup=false`; cache vault và private_vault mã hóa |
 | T7 | Truy cập filesystem thiết bị (root/debug) | D3 | Không lưu message private; asset cache mã hóa, key trong Keystore; `prv_rt` bị xóa |
 | T8 | Dump DB / backup server bị lộ | D3 | Mã hóa AES-GCM app-level, key không nằm trong DB/backup |
 | T9 | Log server / access log | D2, D3 | Redaction; tắt access log cho `/v1/private/*`; private logger chỉ id + code |
@@ -48,6 +50,8 @@ Phụ thuộc: `ARCHITECTURE.md` §2.3, §4, §7.1, §10, §11, §13; `CHARACTER
 | T14 | Prompt injection khiến Hana nhắc private ở normal | D3 | Normal context không chứa dữ liệu private — không có gì để lộ |
 | T15 | Dấu vết thời điểm dùng private trong dữ liệu normal | metadata D3 | Private không cập nhật `relationship_state`, `audit_log`, `llm_calls`, metrics có label |
 | T16 | Nội dung bất hợp pháp trong private | pháp lý/an toàn | Giới hạn tuyệt đối §10, guard từ khóa + policy model |
+| T17 | Người khác nhìn thấy stage hiển thị asset nhạy cảm ở normal zone (màn hình, recents, screenshot) | D2V | `relationship_stage_enabled` mặc định tắt; daily/assistant ưu tiên tier sensitivity thấp nhất; `stage_discreet`; FLAG_SECURE `auto` trên Home; privacy overlay khi `inactive` nếu stage đang hiện asset ≥ suggestive (§4.1) |
+| T18 | LLM / prompt injection / action đổi owner asset policy hoặc chọn asset | D2V, D3 | Không action nào có key asset policy; policy chỉ đổi qua UI; LLM không thấy asset metadata; Director tính `stage_context` xác định; client ép `private` → `daily` ở normal engine (INV-21, INV-22) |
 
 ---
 
@@ -59,6 +63,24 @@ Phụ thuộc: `ARCHITECTURE.md` §2.3, §4, §7.1, §10, §11, §13; `CHARACTER
 - Android: `allowBackup=false`, `dataExtractionRules` loại toàn bộ, không ghi log nội dung trong release.
 - Server: redaction (ARCHITECTURE §11.2 quy tắc 8), audio input xóa sau 24 h, TTS 7 ngày, prompt không log.
 - Notification preview mặc định `generic` cho companion/report; reminder hiển thị tiêu đề do người dùng đặt.
+
+### 4.1 Vault assets (asset nhạy cảm được phép ở normal zone — D2V)
+
+Áp dụng cho asset `delivery = vault` (CHARACTER_SYSTEM §2.7): `content_sensitivity ∈ {suggestive, private}` và `allowed_modes ∩ {daily, assistant, relationship} ≠ ∅`. Seed Phase 3.2: 43/43 video.
+
+| Bước | Chi tiết |
+|---|---|
+| Server | `ASSET_VAULT_ROOT` (volume riêng, không static route); `GET /v1/assets/manifest`, `GET /v1/assets/{asset_id}` (+`/poster`, `/blur`) yêu cầu access JWT; `Cache-Control: no-store`; `asset_id` phải khớp `^chr_\d{3}$` **và** thuộc vault manifest hiện hành (id của private_vault → 404) |
+| Manifest | validate CHARACTER_SYSTEM §4.4 (`manifest_kind=vault`); cache bản đã verify trong drift (chỉ metadata, không media) |
+| Tải | nền, sau đăng nhập và khi manifest đổi; stream vào RAM ≤ 16 MB/file; verify sha256 |
+| Mã hóa cache | AES-256-GCM, key `vault_asset_key` 32 byte sinh lần đầu, lưu `flutter_secure_storage` (Keystore), **khác** key private; file `<app_support>/asset_vault/<sha256(asset_id)>.bin` = `"HNV1" ‖ nonce ‖ ciphertext ‖ tag`; tên file không chứa asset_id |
+| Giải mã runtime | normal engine: `<cache>/vault_rt/<random>.mp4`, tối đa 8 file (LRU), verify sha256 sau giải mã; private engine giải mã vault asset vào `prv_rt` (xóa khi khóa) |
+| Xóa | `vault_rt` xóa ở bootstrap, logout, và khi app `paused` ≥ 60 s; logout / delete-all / thu hồi device → xóa `asset_vault` + `vault_asset_key` |
+| Màn hình | `stage_secure_window=auto` (mặc định): FLAG_SECURE trên route Home khi library normal có asset eligible với sensitivity ≥ suggestive; `always`; `off` (owner chấp nhận). `AppLifecycleState.inactive` khi stage đang hiện asset ≥ suggestive → overlay mờ đục (như private). `stage_discreet=true` → chỉ silhouette |
+| Notification / widget / share | Không bao giờ chứa poster/frame asset nào (mọi sensitivity) |
+| Owner policy | `hana.asset_policy`, `hana.asset_policy_overrides` (D1) — chỉ đổi qua UI; không action LLM (AI_PROTOCOL §7.2) |
+
+Vault asset **không** phải dữ liệu private: việc hiển thị nó ở `daily`/`assistant`/`relationship` là quyết định owner (D8). Nó không làm thay đổi bất kỳ quy tắc cách ly dữ liệu private nào (§5–§13).
 
 ---
 
@@ -196,14 +218,16 @@ Turn private đang xử lý trên server vẫn hoàn tất và lưu vào `hana_p
 
 ### 5.6 Private assets
 
+Áp dụng cho asset `delivery = private_vault` (`allowed_modes == [private]`). Seed Phase 3.2: 0 asset (mọi video đều cho phép `relationship`, nên nằm ở vault §4.1). Private engine dùng library = bundle ∪ vault ∪ private_vault; vault asset được giải mã vào `prv_rt` trong private session.
+
 | Bước | Chi tiết |
 |---|---|
-| Manifest | `GET /v1/private/assets/manifest` → validate schema (CHARACTER_SYSTEM §4.4), `manifest_mode=private`; giữ RAM |
+| Manifest | `GET /v1/private/assets/manifest` → validate schema (CHARACTER_SYSTEM §4.4), `manifest_kind=private_vault`; giữ RAM; private overrides (`/v1/private/assets/policy/overrides`) giữ RAM |
 | Tải | Asset chưa có trong cache hoặc sha256 lệch → `GET /v1/private/assets/{asset_id}` (+ `/poster`, `/blur`); stream vào RAM ≤ 16 MB/file |
 | Mã hóa cache | AES-256-GCM, key 32 byte sinh lần đầu, lưu `flutter_secure_storage` (Android Keystore); nonce 12 byte ngẫu nhiên mỗi file; file `<app_support>/prv_assets/<sha256(asset_id)>.bin` = `"HNP1" ‖ nonce ‖ ciphertext ‖ tag`; tên file không chứa asset_id |
 | Giải mã runtime | Khi mở private: giải mã asset cần phát vào `<cache>/prv_rt/v/<random>.mp4` (tên ngẫu nhiên); verify sha256 sau giải mã; lỗi → xóa cache file, tải lại 1 lần |
 | Xóa | Khóa → xóa `prv_rt`; "Xóa dữ liệu riêng tư trên máy" → xóa `prv_assets` + key; private wipe → cả hai |
-| Normal | Normal engine không nhận private manifest; normal bundle không chứa private (CI scan) |
+| Normal | Normal engine không nhận private_vault manifest hay private overrides; APK không chứa asset sensitivity ≥ suggestive (CI scan); vault asset ở normal zone theo §4.1 |
 
 ### 5.7 LLM trong private
 
@@ -218,8 +242,12 @@ Turn private đang xử lý trên server vẫn hoàn tất và lưu vào `hana_p
 | Khả năng | Normal | Private |
 |---|---|---|
 | Chat text / voice / TTS | ✔ | ✔ |
-| Core states + special normal | ✔ | ✔ |
-| Special/core private assets | ✘ | ✔ |
+| Asset `bundle` / `vault` với StageContext `daily`, `assistant` (ưu tiên tier sensitivity thấp nhất) | ✔ | — |
+| Asset `vault` với StageContext `relationship` (khi owner bật) | ✔ | — |
+| Asset có `private ∈ allowed_modes` (bundle, vault, private_vault) với StageContext `private` | ✘ | ✔ |
+| Asset `private_vault` | ✘ | ✔ |
+| Sửa owner asset policy toàn cục / override bundle-vault | ✔ (UI) | ✘ |
+| Override asset private_vault | ✘ | ✔ (UI) |
 | Memory normal (đọc) | ✔ | chỉ `v_profile_memories` + `relationship_state` |
 | Memory normal (ghi) | ✔ | ✘ |
 | Memory private | ✘ | ✔ |
@@ -262,7 +290,9 @@ Mọi endpoint yêu cầu access JWT. Cột "Session" = cần `X-Private-Session
 | GET/POST/PATCH/DELETE | `/v1/private/memories[/{id}]` | ✔ | |
 | POST | `/v1/private/action-executions/{id}/undo` | ✔ | |
 | GET | `/v1/private/assets/manifest` | ✔ | |
-| GET | `/v1/private/assets/{asset_id}` \| `/poster` \| `/blur` | ✔ | `asset_id` validate regex `^p\.(core|special)\.[a-z0-9_]+\.\d{2}$` hoặc thuộc manifest; không nhận path |
+| GET | `/v1/private/assets/{asset_id}` \| `/poster` \| `/blur` | ✔ | `asset_id` khớp `^chr_\d{3}$` **và** thuộc private_vault manifest hiện hành; không nhận path |
+| GET | `/v1/private/assets/policy/overrides` | ✔ | override của asset private_vault |
+| PUT / DELETE | `/v1/private/assets/policy/overrides/{asset_id}` | ✔ | `{enabled, allowed_modes ⊆ [private], weight_multiplier}`; asset_id không thuộc private_vault → 404 |
 | GET | `/v1/private/media/{media_id}` | ✔ | TTS private |
 | POST | `/v1/private/wipe` | ✔ | `{pin, confirm: "XOA"}` → job `private_wipe` |
 
@@ -436,7 +466,8 @@ Mọi key private có TTL (session ≤ 2 h, stream 15 phút sau kết thúc, deb
 | Xóa lịch sử private | Trong private → `DELETE /v1/private/messages` |
 | Xóa toàn bộ dữ liệu private | Trong private → "Xóa sạch" → PIN + gõ `XOA` → `private_wipe`: xóa mọi row `hana_private` của user, `PRIVATE_MEDIA_ROOT` của user, Redis db1 key của user, hủy session, revoke biometric keys; client xóa `prv_assets`, key cache và key biometric Keystore |
 | Export dữ liệu normal | Settings → Xuất dữ liệu → job `data_export` → zip: `messages.json`, `memories.json`, `journal.json`, `reports/*.md`, `tasks.json`, `reminders.json`, `instructions.json`, `settings.json`; tải qua `/v1/media/{id}` 24 h |
-| Xóa toàn bộ dữ liệu | Settings → "Xóa tất cả dữ liệu" → mật khẩu → `POST /v1/data/delete-all`: xóa toàn bộ normal + private của user (giữ tài khoản owner), đăng xuất mọi device |
+| Xóa toàn bộ dữ liệu | Settings → "Xóa tất cả dữ liệu" → mật khẩu → `POST /v1/data/delete-all`: xóa toàn bộ normal + private của user (gồm `asset_policy`, `asset_policy_overrides`, `private_asset_policy_overrides`; giữ tài khoản owner và thư viện asset trên server), đăng xuất mọi device (client xóa `asset_vault`, `vault_rt`, `vault_asset_key`) |
+| Owner asset policy | Settings → "Nhân vật & hình ảnh": bật/tắt hình ảnh tình cảm, cách kích hoạt, stage kín đáo, chặn chụp màn hình, override theo asset (F-20); private_vault override chỉ trong Cài đặt riêng tư |
 | Thu hồi thiết bị | Settings → Thiết bị → Thu hồi → `POST /v1/devices/{id}/revoke`: thu hồi refresh token, hủy private session, revoke biometric key của device, xóa FCM token |
 
 ---
@@ -463,7 +494,14 @@ Chạy trên text người dùng (và transcript) **trước** khi gọi LLM pri
 
 ### 10.3 Normal mode
 
-AI_PROTOCOL §3.2: không nội dung tình dục tường minh.
+- **Văn bản/giọng nói (LLM):** AI_PROTOCOL §3.2: không nội dung tình dục tường minh. Không đổi bởi Phase 3.2.
+- **Hình ảnh (asset):** do owner asset policy quyết định (CHARACTER_SYSTEM §17, D8); daily/assistant ưu tiên tier sensitivity thấp nhất; relationship chỉ khi owner bật.
+
+### 10.4 Giới hạn tuyệt đối áp dụng cho asset
+
+- §10.1 áp dụng cho **mọi** asset ở mọi zone và mọi StageContext, không owner policy nào vượt qua được.
+- Asset vi phạm (hoặc nghi ngờ có cơ sở) → `hard_block: true` trong `labels.yaml`: không transcode, không publish, không override được.
+- Seed Phase 3.2: Phase 3 xác nhận 43/43 là cùng một nhân vật nữ trưởng thành (identity pass 43/43) → 0 `hard_block`.
 
 ---
 
@@ -476,7 +514,9 @@ AI_PROTOCOL §3.2: không nội dung tình dục tường minh.
 | L3 | Private SSE vào normal engine | endpoint + stream key + client scope tách | — |
 | L4 | Notification từ private | không có code path; không FCM credential ở worker_private | — |
 | L5 | Private message lưu drift | drift không có bảng private; lint import | test quét file DB sau phiên private |
-| L6 | Asset private trong APK | CI scan | build fail |
+| L6 | Asset `content_sensitivity ≥ suggestive` hoặc `private_vault` trong APK | CI scan (chỉ cho phép asset của `bundle_manifest.json` với sensitivity `normal`) | build fail |
+| L16 | Asset `private_vault` phục vụ qua endpoint normal / nằm trong vault manifest | validator `manifest_kind`; endpoint `/v1/assets/{id}` chỉ phục vụ id thuộc vault manifest | 404; manifest bị từ chối |
+| L17 | Vault asset giải mã còn trên disk sau logout / khi app ở nền lâu | wipe `vault_rt` ở bootstrap, logout, paused ≥ 60 s; logout xóa `asset_vault` + key | — |
 | L7 | `prv_rt` còn lại sau crash | wipe ở bootstrap | — |
 | L8 | Screenshot / recents | FLAG_SECURE + overlay | — |
 | L9 | Access log lộ thời điểm dùng private | tắt log path private | — |
@@ -501,6 +541,7 @@ INV-04, INV-05, INV-06, INV-07, INV-14, INV-15 (ARCHITECTURE §13), cộng:
 | PRV-04 | Mọi nội dung văn bản private trong DB là ciphertext AES-GCM với AAD gắn row. |
 | PRV-05 | Không log line nào của private chứa nội dung người dùng hoặc Hana. |
 | PRV-06 | Private session không bao giờ được ghi xuống disk trên thiết bị. |
+| PRV-08 | Không asset `delivery=private_vault` và không private asset override nào được phục vụ/đọc qua endpoint normal hoặc có mặt trong bundle/vault manifest; normal engine không bao giờ dùng StageContext `private`. |
 | PRV-07 | PIN 6 số luôn tồn tại khi private đã setup và luôn mở được private (trừ lockout); biometric không bao giờ là credential duy nhất, chỉ được enroll sau khi nhập PIN, và mọi key bị revoke khi đổi/reset PIN. |
 
 ---
@@ -516,8 +557,8 @@ INV-04, INV-05, INV-06, INV-07, INV-14, INV-15 (ARCHITECTURE §13), cộng:
 | ISO-05 | Sau 1 phiên private (3 turn text, 1 voice, 1 memory.remember), so snapshot mọi bảng schema `hana` trước/sau | không đổi, ngoại trừ `refresh_tokens`/`devices` do endpoint auth normal (`/v1/auth/refresh`) gây ra; request `/v1/private/*` không cập nhật `devices.last_seen_at` |
 | ISO-06 | Sau phiên private, prompt của turn normal kế tiếp (FakeChatGateway ghi lại) | không chứa chuỗi nào từ phiên private |
 | ISO-07 | Gửi `reminder.create` trong private (FakeChatGateway) | `ACTION_NOT_ALLOWED`, không row `reminders` |
-| ISO-08 | Normal manifest validator với asset `mode=private` | từ chối |
-| ISO-09 | APK scan | không asset private |
+| ISO-08 | Validator bundle/vault manifest với asset `delivery=private_vault` (hoặc `allowed_modes == [private]`); bundle manifest với asset sensitivity ≠ `normal` | từ chối toàn bộ manifest |
+| ISO-09 | APK scan | chỉ asset `bundle` sensitivity `normal`; không `vault/`, `private_vault/` |
 | ISO-10 | Flutter integration: mở private, phát clip private, background 61 s, resume | màn khóa; `prv_rt` rỗng; FLAG_SECURE tắt ở màn normal |
 | ISO-11 | Kill app khi đang private, khởi động lại | vào normal; `prv_rt` rỗng |
 | ISO-12 | Endpoint normal `/v1/turns/{private_turn_id}` | 404 |
@@ -535,3 +576,8 @@ INV-04, INV-05, INV-06, INV-07, INV-14, INV-15 (ARCHITECTURE §13), cộng:
 | ISO-24 | `last_pin_unlock_at` quá 72 giờ | challenge 403 `PRIVATE_PIN_REQUIRED`; PIN đúng vẫn mở được |
 | ISO-25 | Đổi PIN | mọi `private_biometric_keys` có `revoked_at`; biometric unlock sau đó bị từ chối |
 | ISO-26 | Lockout PIN đang hiệu lực | biometric unlock cũng trả 423 |
+| ISO-27 | `GET /v1/assets/{asset_id}` với id của asset private_vault (fixture) | 404; access log không có path private |
+| ISO-28 | Normal engine nhận `CharacterCue` có `stage_context=private` (fuzz SSE normal) | dùng `daily`; không Play asset nào theo context `private`; CHR-04 đúng |
+| ISO-29 | Sau phiên private có override private_vault, đọc `GET /v1/assets/policy` và bảng `hana.asset_policy_overrides` | không có asset_id/override private_vault |
+| ISO-30 | Prompt normal + private (FakeChatGateway ghi lại) sau khi đổi owner asset policy | không chứa `chr_\d{3}`, tên nguồn, `content_sensitivity`, `allowed_modes`, `stage_context` |
+| ISO-31 | Logout sau khi phát vault asset | `asset_vault/`, `vault_rt/` rỗng; `vault_asset_key` bị xóa |

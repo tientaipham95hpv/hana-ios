@@ -1,6 +1,6 @@
 # HANA — ACCEPTANCE CRITERIA
 
-Phiên bản: 1.1 (Phase 1 + Final Decision Patch) · Vị trí canonical: `repo/docs/` · Quyết định chốt: ARCHITECTURE §0.1
+Phiên bản: 1.2 (Phase 1 + Final Decision Patch + Phase 3.2 Asset Policy Patch) · Vị trí canonical: `repo/docs/` · Quyết định chốt: ARCHITECTURE §0.1
 Áp dụng cho: toàn bộ implementation v1. Một hạng mục chỉ được coi là xong khi mọi AC liên quan PASS.
 
 ---
@@ -23,7 +23,7 @@ Phiên bản: 1.1 (Phase 1 + Final Decision Patch) · Vị trí canonical: `repo
 
 - DOD-1: Code theo layout ARCHITECTURE §5 và quy tắc import §2.3.
 - DOD-2: AC liên quan PASS ở mức ghi trong bảng.
-- DOD-3: Không invariant INV-01…INV-20 nào bị vi phạm (test tương ứng xanh).
+- DOD-3: Không invariant INV-01…INV-22 nào bị vi phạm (test tương ứng xanh).
 - DOD-4: Migration có downgrade (trừ khi ghi rõ không thể), grants test xanh.
 - DOD-5: Không secret trong repo (secret scan xanh).
 - DOD-6: Log không chứa nội dung người dùng (test redaction xanh).
@@ -72,7 +72,7 @@ Phiên bản: 1.1 (Phase 1 + Final Decision Patch) · Vị trí canonical: `repo
 | AC-CHAT-08 | Envelope hỏng → 1 lần `output_repair`; vẫn hỏng và raw không chứa `{` → dùng raw làm reply; ngược lại fallback | I |
 | AC-CHAT-09 | Tắt mạng thiết bị, gửi 3 tin → bubble `queued`; bật mạng → gửi đúng thứ tự, không trùng | E |
 | AC-CHAT-10 | Assistant message không chứa chuỗi `{{` | U/I |
-| AC-CHAT-11 | Prompt gửi gateway không chứa UUID, filename video, asset_id (regex) | I |
+| AC-CHAT-11 | Prompt gửi gateway (normal và private) không chứa UUID, filename video (`[A-Z]{4}\d{4}`), asset_id (`chr_\d{3}`), hay các token `content_sensitivity`, `allowed_modes`, `stage_context`, `excluded_by_default`, `review_flag` (regex) | I |
 | AC-CHAT-12 | Prompt có `<now>` đúng giờ Việt Nam theo FakeClock | I |
 | AC-CHAT-13 | Worker bị kill giữa `llm_pending` → sau ≤ 90 s turn `failed(WORKER_UNAVAILABLE)` | I |
 
@@ -91,7 +91,8 @@ Phiên bản: 1.1 (Phase 1 + Final Decision Patch) · Vị trí canonical: `repo
 | AC-AI-09 | `LLM_JSON_MODE=auto` + gateway trả 400 `response_format` → gửi lại không field, lần sau không gửi field | I |
 | AC-AI-10 | Tạo reminder trùng (cùng title, cùng `due_local`, trong 10 phút) → không tạo mới | I |
 | AC-AI-11 | Mọi call ghi `llm_calls` chỉ metadata (không cột nội dung) | I |
-| AC-AI-12 | `special_cue` không có trong catalog mode → cue gửi client = `null` | U |
+| AC-AI-12 | `special_cue` không có trong catalog zone, hoặc không thuộc `allowed_modes` của `stage_context` Director tính → cue gửi client = `null` | U |
+| AC-AI-13 | Envelope có field lạ (`asset_id`, `stage_context`, `file`) hoặc `settings.update` với key thuộc owner asset policy (`relationship_stage_enabled`, `stage_discreet`, override…) → field bị bỏ / action `ACTION_INVALID`; không thay đổi `asset_policy` | U/I |
 
 ## 5. Voice
 
@@ -132,7 +133,7 @@ Phiên bản: 1.1 (Phase 1 + Final Decision Patch) · Vị trí canonical: `repo
 | AC-CHR-02 | Property test 10.000 event ngẫu nhiên: CHR-01, CHR-03, CHR-04 luôn đúng, không exception | U |
 | AC-CHR-03 | Director: fuzz emotion/cue bất kỳ → output luôn hợp lệ; bảng §6.2 pass | U |
 | AC-CHR-04 | Không có đường nào để server/LLM gửi asset_id/filename tới engine: `CharacterCue.fromJson` bỏ qua mọi field ngoài schema | U |
-| AC-CHR-05 | Mọi CoreState có ≥ 1 asset normal hoặc có `coverage_waiver` được ghi rõ | C |
+| AC-CHR-05 | `label_check.py` sinh `coverage_report.json` cho mọi (StageContext × CoreState) với số primary/shared/main-loop; ô = 0 chỉ là cảnh báo, exit code 0 (không còn yêu cầu asset riêng mỗi CoreState, không còn `coverage_waiver`) | C |
 | AC-CHR-06 | Asset thiếu/hỏng → chọn variant khác → idle → poster; stage không bao giờ đen (widget test mô phỏng lỗi) | W |
 | AC-CHR-07 | Thinking min dwell 500 ms: reply đến sau 100 ms vẫn giữ thinking ≥ 500 ms | U |
 | AC-CHR-08 | `surprised` + TTS → overlay trước khi nói ≤ 1.200 ms; `happy medium` + TTS → overlay sau khi nói | U |
@@ -141,12 +142,34 @@ Phiên bản: 1.1 (Phase 1 + Final Decision Patch) · Vị trí canonical: `repo
 | AC-CHR-11 | (M) Chuyển state trên thiết bị tầm trung: crossfade không giật, không khung đen, bộ nhớ ổn định sau 30 phút sử dụng | M |
 | AC-MED-01 | `verify.py`: mọi file app-ready có đúng 1 stream video H.264 yuv420p, 0 audio, 0 attached pic | C |
 | AC-MED-02 | sha256 toàn bộ `assets_source` trước = sau khi chạy pipeline | C |
-| AC-MED-03 | File nguồn không có nhãn hoặc `decision≠include` → không có trong output | C |
-| AC-MED-04 | Manifest ship không chứa tên file nguồn (vd regex `[A-Z]{4}\d{4}`) | C |
+| AC-MED-03 | File nguồn không có nhãn hợp lệ hoặc `hard_block=true` → không có trong output; asset `review_flag=true`, `technical_quality=poor`, `excluded_by_default=true` **vẫn** có trong output và manifest | C |
+| AC-MED-04 | Manifest ship không chứa tên file nguồn (regex `[A-Z]{4}\d{4}`), `source_file`, `notes`, `hard_block`, `sensitivity_source`; mọi `asset_id` khớp `^chr_\d{3}$` | C |
 | AC-MED-05 | Mọi `VideoPlayerController` được tạo với `mixWithOthers: true` và `setVolume(0)` trước `play()` | W |
 | AC-MED-06 | CI grep: không `setVolume(` với giá trị khác 0 trong `lib/` | C |
 | AC-MED-07 | Đang phát nhạc app khác, mở Hana (video chạy, không TTS) → nhạc không bị dừng/giảm | M |
-| AC-MED-08 | APK/AAB không chứa asset `p.*` hoặc thư mục `private/` | C |
+| AC-MED-08 | APK/AAB chỉ chứa asset thuộc `bundle_manifest.json` với `content_sensitivity=normal`; không có entry `vault/`, `private_vault/` hay video nào khác (seed Phase 3.2: 0 video trong APK, chỉ `fallback.png`) | C |
+
+## 7a. Asset policy (Phase 3.2)
+
+| ID | Tiêu chí | Mức |
+|---|---|---|
+| AC-AST-01 | `labels.yaml` v2: 43/43 file nguồn có entry hợp lệ (`asset_id` `chr_001…chr_043` theo PHASE_3_2 §7), mỗi entry thuộc ≥ 1 state pool hoặc cue; không entry nào bị loại vì sensitivity; `hard_block` = 0 trừ khi có lý do §10.1 ghi trong `notes` | C |
+| AC-AST-02 | Bảng test `delivery()`: `[private]` → private_vault; `normal` + mode normal-zone → bundle; `suggestive`/`private` + mode normal-zone → vault | U |
+| AC-AST-03 | Thiếu `content_sensitivity` → `private`; thiếu `allowed_modes` → `[private]`; `allowed_modes` rỗng / schema sai / sha256 lệch / `asset_id` trùng → `label_check` exit ≠ 0 | U/C |
+| AC-AST-04 | `ctx ∈ {daily, assistant}`: property test 10.000 lần chọn trên manifest seed + policy ngẫu nhiên → mọi asset được chọn có rank sensitivity = min rank của pool (CHR-07); `relationship`/`private` không lọc tier | U |
+| AC-AST-05 | `relationship_stage_enabled=false` → Director không bao giờ phát `relationship`; normal engine ép `relationship` → `daily`. Bật → reply `shy` không action nghiệp vụ có `stage_context=relationship` và pool gồm asset `content_sensitivity=private` có `relationship` trong `allowed_modes` | U |
+| AC-AST-06 | Turn có action nghiệp vụ executed → `stage_context=assistant`; `working` luôn dùng `assistant`; sau `context_hold_ms` idle → `daily` | U |
+| AC-AST-07 | Normal engine nhận cue `stage_context=private` → dùng `daily`, không bao giờ chọn asset theo context `private`; private engine luôn `private` (CHR-04) | U |
+| AC-AST-08 | `excluded_by_default=true` (`chr_011`, `chr_022`) không eligible; override `enabled=true` → eligible, weight 0.2, không main-loop, không phát 2 lần liên tiếp, không làm clip đầu tiên | U |
+| AC-AST-09 | `review_flag=true` không bao giờ là main-loop khi `M ≠ ∅`; vẫn được chọn làm variant (10.000 lần chọn idle `private` với seed RNG: > 0 lần chọn review, 0 lần review ở slot chính) | U |
+| AC-AST-10 | Asset dùng chung nhiều CoreState (vd `chr_018` idle/listening/talking) được chọn cho cả ba; `shared` nhận trọng số × 0.5 so với `primary` (kiểm định thống kê) | U |
+| AC-AST-11 | Fallback chain §11.3 từng bước: state rỗng → idle(ctx) → state/idle(daily) (assistant, relationship) → poster → silhouette; overlay rỗng → không overlay; không bao giờ chọn asset không eligible cho ctx | U/W |
+| AC-AST-12 | `GET /v1/assets/{asset_id}` không JWT → 401; id không khớp regex, không thuộc vault manifest, hoặc thuộc private_vault → 404; `/v1/private/assets/{id}` không session → 401 | I |
+| AC-AST-13 | `PUT /v1/assets/policy/overrides/{id}` thêm `daily` cho asset sensitivity ≥ suggestive (labels không có) mà thiếu `confirm_sensitive=true` → 422 `ASSET_POLICY_CONFIRM_REQUIRED`; override asset private_vault qua endpoint normal → 404; `policy_version` tăng mỗi lần sửa; engine nhận `PolicyUpdated` và chọn lại nếu clip hiện tại hết eligible | I/U |
+| AC-AST-14 | Vault cache: file trong `asset_vault/` là ciphertext `HNV1`, tên không chứa asset_id; `vault_rt` rỗng sau bootstrap, logout, paused ≥ 60 s; logout xóa `asset_vault` + key | E |
+| AC-AST-15 | `stage_discreet=true` → stage chỉ silhouette; `stage_secure_window=auto` với library có asset ≥ suggestive → FLAG_SECURE bật trên Home; `inactive` khi đang hiện asset ≥ suggestive → overlay | W/M |
+| AC-AST-16 | Vault chưa tải (offline lần đầu) → stage silhouette, chat hoạt động; có mạng → tải nền, `AssetReady` → phát clip | E |
+| AC-AST-17 | Mọi asset ở mọi delivery/sensitivity/cờ đều qua `verify.py` (0 audio) và phát với volume 0 (AC-MED-01, AC-MED-05 chạy trên toàn bộ 43 asset) | C/W |
 
 ## 8. Tasks, reminders, notifications
 
@@ -253,7 +276,7 @@ Phiên bản: 1.1 (Phase 1 + Final Decision Patch) · Vị trí canonical: `repo
 
 | ID | Tiêu chí | Mức |
 |---|---|---|
-| AC-PRV-01 | Toàn bộ bộ test ISO-01…ISO-20 (PRIVACY_SPEC §13) pass | I/W/E/C |
+| AC-PRV-01 | Toàn bộ bộ test ISO-01…ISO-20 và ISO-27…ISO-31 (PRIVACY_SPEC §13) pass | I/W/E/C |
 | AC-PRV-02 | Private chỉ mở chủ động từ Settings bằng PIN 6 số, hoặc biometric nếu người dùng đã tự bật; không lệnh chat/voice/notification/deep link nào mở được | E |
 | AC-PRV-19 | Setup private bắt buộc PIN 6 số; biometric mặc định tắt và chỉ enroll được sau khi nhập đúng PIN | I/E |
 | AC-PRV-20 | Mọi màn mở khóa biometric có nút "Dùng PIN"; hủy/lỗi biometric/key bị vô hiệu → luồng PIN mở được private | E |
@@ -297,7 +320,7 @@ Phiên bản: 1.1 (Phase 1 + Final Decision Patch) · Vị trí canonical: `repo
 | AC-FAIL-01 | Mỗi dòng F01–F22 (ARCHITECTURE §12) có test hoặc checklist M tương ứng, kết quả khớp cột "Hành vi" | I/M |
 | AC-FAIL-02 | Redis flush khi có job queued → scheduler requeue theo DB, không mất report/reminder | I |
 | AC-FAIL-03 | 9Router trả 503 liên tục 5 phút → app vẫn dùng được các màn CRUD, chat trả fallback | I/E |
-| AC-FAIL-04 | Manifest normal hỏng → app chạy, stage hiển thị fallback, chat hoạt động | W |
+| AC-FAIL-04 | Bundle hoặc vault manifest hỏng / vi phạm ràng buộc `manifest_kind` → manifest đó bị từ chối toàn bộ, app chạy, stage hiển thị fallback, chat hoạt động | W |
 
 ## 16. Hiệu năng
 
@@ -319,3 +342,16 @@ Phiên bản: 1.1 (Phase 1 + Final Decision Patch) · Vị trí canonical: `repo
 | AC-P1-05 | Không có code ứng dụng được tạo trong Phase 1 | có |
 | AC-P1-06 | Final Decision Patch áp dụng: kỳ half-open 15→15 thống nhất ở mọi tài liệu; Android target V1 / iOS ngoài phạm vi; FCM tùy chọn; mặc định cấu hình được; PIN bắt buộc + biometric tùy chọn; provider STT/TTS/private LLM ghi UNRESOLVED | có (ARCHITECTURE §0.1) |
 | AC-P1-07 | Tài liệu được sync sang `repo/docs/` (canonical), bản gốc `Hana/docs/` giữ nguyên | có |
+
+## 18. Tiêu chí hoàn thành Phase 3.2 (asset policy patch — tài liệu)
+
+| ID | Tiêu chí | Kết quả kỳ vọng |
+|---|---|---|
+| AC-P32-01 | Spec canonical tách `content_sensitivity` (`normal|suggestive|private`) và `allowed_modes` (⊆ `daily|assistant|relationship|private`); không còn `category=private`, `mode: normal|private` của asset, `coverage_waiver` | có (CHARACTER_SYSTEM §2.5–§2.8, §4) |
+| AC-P32-02 | Giữ invariant: LLM không thấy/chọn filename/asset_id; Character Engine chọn asset; mọi video muted; voice chỉ TTS | có (INV-02, INV-03, INV-21; AIP-06) |
+| AC-P32-03 | Owner policy: relationship/private dùng được asset sensitivity cao; daily/assistant ưu tiên tier thấp nhất; pool rỗng → fallback, không fail build | có (CHARACTER_SYSTEM §11, §17) |
+| AC-P32-04 | Không yêu cầu mỗi CoreState có asset riêng; nhiều CoreState dùng chung pool | có (CHARACTER_SYSTEM §2.1, §4.2) |
+| AC-P32-05 | 43/43 video có seed policy, không clip nào bị loại vì Phase 3 `category=private` | có (PHASE_3_2 §7) |
+| AC-P32-06 | 2 clip jump-cut: `technical_quality=poor`, `oneshot`, weight thấp, `excluded_by_default=true`, owner bật lại được | có (PHASE_3_2 §9.1) |
+| AC-P32-07 | 19 clip review: giữ, `review_flag=true`, weight thấp, không main-loop | có (PHASE_3_2 §9.2) |
+| AC-P32-08 | PRD, ARCHITECTURE, CHARACTER_SYSTEM, PRIVACY_SPEC, ACCEPTANCE_CRITERIA, AI_PROTOCOL cập nhật nhất quán; không code; `assets_source`, `asset_analysis` không bị sửa | có |
