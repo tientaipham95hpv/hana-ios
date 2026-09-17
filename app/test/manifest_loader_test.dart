@@ -24,16 +24,20 @@ void main() {
     'canonical Phase 4 master yields the identical sanitized runtime schema',
     () {
       final raw = jsonDecode(
-        File('../../assets_processed/hana/character_manifest.json')
-            .readAsStringSync(),
+        File('test/fixtures/phase4_master_manifest.json').readAsStringSync(),
       ) as Map<String, dynamic>;
       expect(raw['manifest_kind'], 'master');
-      final result = loader.load(jsonEncode(sanitizePhase4Manifest(raw)));
+      final sanitized = sanitizePhase4Manifest(raw);
+      final runtime = jsonDecode(
+        File('assets/character/character_manifest.json').readAsStringSync(),
+      );
+      expect(sanitized, runtime);
+      final result = loader.load(jsonEncode(sanitized));
       expect(result.isValid, isTrue, reason: result.error);
       expect(result.manifest!.assets, hasLength(43));
-      final runtime = canonicalManifest();
+      final runtimeManifest = canonicalManifest();
       for (final asset in result.manifest!.assets) {
-        final bundled = runtime.byId[asset.assetId]!;
+        final bundled = runtimeManifest.byId[asset.assetId]!;
         expect(bundled.states, asset.states);
         expect(bundled.technicalQuality, asset.technicalQuality);
         expect(bundled.weight, asset.weight);
