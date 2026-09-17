@@ -1,5 +1,7 @@
 # HANA — ACCEPTANCE CRITERIA
 
+> **Phase 6.3 gate override (2026-09-17):** iOS is the sole V1 client. End-to-end (`E`) means iPhone/iOS Simulator plus the Hana stack; CI/build (`C`) inspects the iOS app/IPA where packaging applies. All older Android emulator, ADB, APK/AAB, exact-alarm, and `google-services.json` gates below are retired for V1. Active voice routing is Deepgram STT plus iOS `AVSpeechSynthesizer`; server/9Router/ElevenLabs TTS gates are retired. Android source may remain but cannot block or satisfy V1 acceptance.
+
 Phiên bản: 1.2 (Phase 1 + Final Decision Patch + Phase 3.2 Asset Policy Patch) · Vị trí canonical: `repo/docs/` · Quyết định chốt: ARCHITECTURE §0.1
 Áp dụng cho: toàn bộ implementation v1. Một hạng mục chỉ được coi là xong khi mọi AC liên quan PASS.
 
@@ -14,8 +16,8 @@ Phiên bản: 1.2 (Phase 1 + Final Decision Patch + Phase 3.2 Asset Policy Patch
 | U | Unit test | pytest / flutter test, không I/O thật |
 | I | Integration test | Docker Postgres 16 + Redis 7 thật; `FakeChatGateway`, `FakeSttProvider`, `FakeTtsProvider`; `FakeClock` |
 | W | Widget test | Flutter test với fake repositories |
-| E | End-to-end | Android emulator/thiết bị + stack local compose + Fake gateway (hoặc 9Router thật khi ghi rõ) |
-| C | CI check | lint, import-linter, grep, scan APK, ffprobe |
+| E | End-to-end | iPhone/iOS Simulator + stack local compose + Fake gateway (hoặc provider thật khi ghi rõ) |
+| C | CI check | lint, import-linter, grep, scan iOS app/IPA khi có artifact, ffprobe |
 | M | Manual QA | checklist có ghi kết quả, ảnh/video bằng chứng |
 | L | Live | 9Router thật (đánh dấu `-m live_9router`), không chạy trong CI mặc định |
 
@@ -38,9 +40,9 @@ Phiên bản: 1.2 (Phase 1 + Final Decision Patch + Phase 3.2 Asset Policy Patch
 | AC-GEN-01 | `docker compose -f infra/compose.dev.yml up` khởi động postgres, redis, api, worker, worker_private, scheduler; `GET /readyz` = 200 trong ≤ 60 s | I/M |
 | AC-GEN-02 | `readyz` trả 503 khi dừng Postgres hoặc Redis; trả 200 khi phục hồi | I |
 | AC-GEN-03 | `alembic upgrade head` từ DB rỗng tạo schema `hana`, `hana_private`, extensions `pg_trgm`, `unaccent`, `btree_gist` | I |
-| AC-GEN-09 | Target build V1 duy nhất là Android (flavor dev/staging/prod build được); repo không yêu cầu toolchain iOS | C |
+| AC-GEN-09 | Target build V1 duy nhất là iOS; `flutter build ios --release --no-codesign` PASS trên macOS/Xcode được hỗ trợ | C |
 | AC-GEN-10 | Tài liệu canonical nằm trong `repo/docs/` và được version-control cùng source | C |
-| AC-GEN-11 | App Android build và chạy được khi **không** có `google-services.json` / FCM credential | C/E |
+| AC-GEN-11 | App iOS build/chạy được khi không có cloud TTS credential; native TTS không cần API key | C/E |
 | AC-GEN-04 | Postgres `SHOW timezone` = `UTC`; container `TZ=UTC` | I |
 | AC-GEN-05 | Postgres, Redis, 9Router không publish port ra ngoài trong `compose.prod.yml` (chỉ Caddy 80/443) | C |
 | AC-GEN-06 | Flavor `prod`/`staging` từ chối cleartext HTTP | E |
@@ -108,22 +110,22 @@ Phiên bản: 1.2 (Phase 1 + Final Decision Patch + Phase 3.2 Asset Policy Patch
 | AC-VOC-08 | Audio input normal có `expires_at = +24h` và bị cleanup xóa file | I |
 | AC-VOC-09 | Nhấn mic khi TTS đang phát → âm thanh dừng ≤ 200 ms, ghi âm bắt đầu sau khi dừng | E |
 | AC-VOC-10 | Cuộc gọi đến khi đang ghi → hủy ghi | M |
-| AC-VOC-11 | (L) STT tiếng Việt qua 9Router với 20 câu mẫu: WER ≤ 15% | L/M |
+| AC-VOC-11 | (L) STT tiếng Việt qua Deepgram `nova-3`, `vi`, với 20 câu mẫu: WER ≤ 15% | L/M |
 
 ## 6. TTS
 
 | ID | Tiêu chí | Mức |
 |---|---|---|
-| AC-TTS-01 | Toàn bộ bảng VOICE_SPEC §15 của `SpeechNormalizer` pass | U |
-| AC-TTS-02 | Segmenter: mọi segment ≤ 220 ký tự; nối lại = input | U |
-| AC-TTS-03 | Segment phát theo đúng thứ tự index kể cả khi synthesize xong lệch thứ tự | I |
-| AC-TTS-04 | Speech text > 1.200 ký tự → đọc ≤ 1.000 ký tự đầu + câu "Phần còn lại…" | U |
-| AC-TTS-05 | TTS lỗi segment 0 → `tts.failed`, turn `completed`, text hiển thị, Hana không vào `talking` | I/W |
-| AC-TTS-06 | `speak_replies=never` → không có call TTS dù client gửi `speak=true` | I |
-| AC-TTS-07 | Cache TTS normal: cùng segment/voice/speed → không gọi provider lần hai | I |
-| AC-TTS-08 | TTS bytes không ghi disk thiết bị (quét thư mục app sau khi phát) | E |
-| AC-TTS-09 | Tin proactive/reminder/report không tự đọc; chạm loa → `POST /speak` → phát | E |
-| AC-TTS-10 | (L) TTS tiếng Việt qua 9Router: 20 câu mẫu chứa giờ/ngày/số được người dùng đánh giá "tự nhiên, dễ nghe" ≥ 18/20 | L/M |
+| AC-TTS-01 | iOS native bridge dùng `AVSpeechSynthesizer`, language `vi-VN`; không gọi cloud/server TTS trên active path | U/E |
+| AC-TTS-02 | Voice Lab liệt kê voice tiếng Việt với name, identifier, locale, quality; không hard-code identifier | E/M |
+| AC-TTS-03 | Voice identifier, rate, pitch, volume cấu hình/persist; giá trị gửi native được bound an toàn | U/W |
+| AC-TTS-04 | Callback start → Character Engine `talking`; finish/cancel/error → trạng thái hội tụ, text giữ nguyên | U/E |
+| AC-TTS-05 | Callback có `turn_id:generation`; callback stale từ utterance A không mutate turn B | U |
+| AC-TTS-06 | TEXT_ONLY không auto-speak; AUTO typed silent/PTT voiced; VOICE_REPLY auto-speak khi auto-play bật | U/W |
+| AC-TTS-07 | Nút loa từng message gọi native TTS từ reply text; stop hủy ngay và không gọi backend `/speech` | U/E |
+| AC-TTS-08 | TTS native không tạo/lưu TTS audio blob trên device hay server | C/E |
+| AC-TTS-09 | Audio interruption/background/route loss dừng speech và deactive session; turn sau vẫn nói được | U/E |
+| AC-TTS-10 | (M) Câu thử Phase 6.3 phát bằng một voice `vi-VN` được liệt kê và nghe rõ trên thiết bị mục tiêu | M |
 
 ## 7. Character system & media
 
@@ -147,7 +149,7 @@ Phiên bản: 1.2 (Phase 1 + Final Decision Patch + Phase 3.2 Asset Policy Patch
 | AC-MED-05 | Mọi `VideoPlayerController` được tạo với `mixWithOthers: true` và `setVolume(0)` trước `play()` | W |
 | AC-MED-06 | CI grep: không `setVolume(` với giá trị khác 0 trong `lib/` | C |
 | AC-MED-07 | Đang phát nhạc app khác, mở Hana (video chạy, không TTS) → nhạc không bị dừng/giảm | M |
-| AC-MED-08 | APK/AAB chỉ chứa asset thuộc `bundle_manifest.json` với `content_sensitivity=normal`; không có entry `vault/`, `private_vault/` hay video nào khác (seed Phase 3.2: 0 video trong APK, chỉ `fallback.png`) | C |
+| AC-MED-08 | iOS app/IPA chỉ chứa asset thuộc `bundle_manifest.json` với `content_sensitivity=normal`; không có entry `vault/`, `private_vault/` hay video nào khác | C |
 
 ## 7a. Asset policy (Phase 3.2)
 
@@ -340,7 +342,7 @@ Phiên bản: 1.2 (Phase 1 + Final Decision Patch + Phase 3.2 Asset Policy Patch
 | AC-P1-03 | Interface Flutter ↔ FastAPI ↔ 9Router ↔ PostgreSQL ↔ Redis ↔ Character Engine ↔ TTS/STT ↔ scheduler được mô tả | có (ARCHITECTURE §2.2, §6, §10; AI_PROTOCOL §2; VOICE_SPEC §2, §5, §7) |
 | AC-P1-04 | Lifecycle chat text, voice, reminder, work journal, memory, monthly report | có |
 | AC-P1-05 | Không có code ứng dụng được tạo trong Phase 1 | có |
-| AC-P1-06 | Final Decision Patch áp dụng: kỳ half-open 15→15 thống nhất ở mọi tài liệu; Android target V1 / iOS ngoài phạm vi; FCM tùy chọn; mặc định cấu hình được; PIN bắt buộc + biometric tùy chọn; provider STT/TTS/private LLM ghi UNRESOLVED | có (ARCHITECTURE §0.1) |
+| AC-P1-06 | Phase 6.3 decision áp dụng: kỳ half-open 15→15; iOS-only V1; Deepgram STT; native iOS TTS; PIN bắt buộc + biometric tùy chọn; private production vẫn disabled | có (ARCHITECTURE §0.1; VOICE_SPEC Phase 6.3 override) |
 | AC-P1-07 | Tài liệu được sync sang `repo/docs/` (canonical), bản gốc `Hana/docs/` giữ nguyên | có |
 
 ## 18. Tiêu chí hoàn thành Phase 3.2 (asset policy patch — tài liệu)

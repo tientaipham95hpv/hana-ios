@@ -1,0 +1,4 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Local-Windows staging talks only to 10.0.2.2; production never merges this manifest. -->
+    <application android:usesCleartextTraffic="true"/>
+</manifest>

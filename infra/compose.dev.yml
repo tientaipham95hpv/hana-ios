@@ -1,0 +1,106 @@
+name: hana-local
+
+x-backend-env: &backend-env
+  TZ: UTC
+  DATABASE_URL_APP: postgresql+asyncpg://hana_app:hana_local@postgres:5432/hana
+  REDIS_URL: redis://redis:6379/0
+  NINE_ROUTER_BASE_URL: ${NINE_ROUTER_BASE_URL:-http://host.docker.internal:20128/v1}
+  MEDIA_ROOT: /data/media
+
+x-ai-env: &ai-env
+  <<: *backend-env
+  NINE_ROUTER_API_KEY: ${NINE_ROUTER_API_KEY:-}
+  AI_FAKE: ${AI_FAKE:-true}
+  MODEL_ALIAS_HANA_CHAT: ${MODEL_ALIAS_HANA_CHAT:-cx/gpt-5.6-terra}
+  MODEL_ALIAS_HANA_CHAT_FALLBACK: ${MODEL_ALIAS_HANA_CHAT_FALLBACK:-cx/gpt-5.6-sol}
+  MODEL_ALIAS_HANA_RELATIONSHIP: ${MODEL_ALIAS_HANA_RELATIONSHIP:-xai/grok-4.6}
+  MODEL_ALIAS_HANA_RELATIONSHIP_FALLBACK: ${MODEL_ALIAS_HANA_RELATIONSHIP_FALLBACK:-xai/grok-4.5}
+  MODEL_ALIAS_HANA_PRIVATE: ${MODEL_ALIAS_HANA_PRIVATE:-xai/grok-4.6}
+  MODEL_ALIAS_HANA_PRIVATE_FALLBACK: ${MODEL_ALIAS_HANA_PRIVATE_FALLBACK:-xai/grok-4.5}
+  STT_PROVIDER: ${STT_PROVIDER:-fake}
+  DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-}
+  DEEPGRAM_STT_MODEL: ${DEEPGRAM_STT_MODEL:-nova-3}
+  DEEPGRAM_LANGUAGE: ${DEEPGRAM_LANGUAGE:-vi}
+  TTS_PROVIDER: ${TTS_PROVIDER:-fake}
+  ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+  ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID:-}
+  ELEVENLABS_MODEL_ID: ${ELEVENLABS_MODEL_ID:-eleven_flash_v2_5}
+  ELEVENLABS_OUTPUT_FORMAT: ${ELEVENLABS_OUTPUT_FORMAT:-mp3_44100_128}
+
+x-backend: &backend
+  build:
+    context: ../backend
+  env_file:
+    - ../backend/.env
+  environment: *backend-env
+  volumes:
+    - media:/data/media
+  extra_hosts:
+    - host.docker.internal:host-gateway
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: hana
+      POSTGRES_USER: hana_app
+      POSTGRES_PASSWORD: hana_local
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      - 127.0.0.1:${HANA_POSTGRES_HOST_PORT:-15432}:5432
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hana_app -d hana"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - 127.0.0.1:${HANA_REDIS_HOST_PORT:-16379}:6379
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  hana-api:
+    <<: *backend
+    environment: *ai-env
+    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+    ports:
+      - 127.0.0.1:${HANA_API_HOST_PORT:-18000}:8000
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  hana-worker:
+    <<: *backend
+    environment: *ai-env
+    command: ["arq", "app.workers.settings.WorkerSettings"]
+
+  hana-scheduler:
+    <<: *backend
+    command: ["python", "-m", "app.scheduler.main"]
+
+volumes:
+  pgdata:
+  redisdata:
+  media:

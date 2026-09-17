@@ -1,5 +1,7 @@
 # HANA — PRODUCT REQUIREMENTS DOCUMENT
 
+> **Phase 6.3 product decision (2026-09-17, supersedes earlier platform/audio decisions):** Hana V1 has one client target: **Flutter iOS**. Android is outside the V1 release and acceptance gate; existing Android source may remain temporarily while shared Flutter code is migrated. V1 speech recognition is server-side Deepgram (`nova-3`, `vi`); V1 speech output is device-local iOS `AVSpeechSynthesizer` (`vi-VN`). ElevenLabs and server-generated TTS audio are not active V1 dependencies. Future V1 gates must not require APK/AAB, ADB, or Android emulator evidence.
+
 Phiên bản: 1.2 (Phase 1 + Final Decision Patch + Phase 3.2 Asset Policy Patch)
 Ngày: 2026-09-15
 Chủ sở hữu tài liệu: Lead Architect
@@ -26,7 +28,7 @@ Hai giá trị cốt lõi phải cùng tồn tại:
 | Mục | Giá trị |
 |---|---|
 | Người dùng | **Một chủ sở hữu duy nhất** (single-owner) — người dùng trưởng thành, nói tiếng Việt, làm việc văn phòng/kỹ thuật |
-| Thiết bị | **Android là target release V1** (điện thoại), tối đa 3 thiết bị đăng nhập. **iOS ngoài phạm vi V1** |
+| Thiết bị | **iOS là target release V1 duy nhất** (iPhone), tối đa 3 thiết bị đăng nhập. Android/web/desktop ngoài phạm vi V1 |
 | Ngôn ngữ | Tiếng Việt (chấp nhận xen thuật ngữ tiếng Anh) |
 | Múi giờ nghiệp vụ | Asia/Ho_Chi_Minh |
 | Triển khai | Tự host: phát triển trên Windows, chạy thật trên VPS riêng |
@@ -66,7 +68,7 @@ Hai giá trị cốt lõi phải cùng tồn tại:
 
 | # | Không làm | Lý do |
 |---|---|---|
-| NG1 | **iOS** (quyết định chốt: ngoài phạm vi V1), web, desktop client | Android là target release V1; toolchain Phase 0 chỉ Android; tập trung chất lượng |
+| NG1 | **Android**, web, desktop client | iOS là target release V1 duy nhất; tập trung chất lượng và lifecycle/audio native iOS |
 | NG2 | Nhiều người dùng / đăng ký công khai | Sản phẩm cá nhân |
 | NG3 | Sinh video/ảnh mới, lip-sync, avatar 3D | Chỉ dùng video có sẵn |
 | NG4 | Wake word, always-listening, duplex voice streaming | Quyền riêng tư, độ phức tạp |
@@ -75,7 +77,7 @@ Hai giá trị cốt lõi phải cùng tồn tại:
 | NG7 | Lịch âm | Sau v1 |
 | NG8 | Export PDF báo cáo | Markdown đủ cho v1 |
 | NG9 | Export dữ liệu private | Giảm bề mặt rò rỉ |
-| NG10 | Nguồn asset ngoài pipeline (tải/sinh asset tùy ý, chỉnh asset trên thiết bị) | Thư viện chỉ gồm asset do asset pipeline publish (bundle trong APK; vault/private_vault republish từ pipeline) |
+| NG10 | Nguồn asset ngoài pipeline (tải/sinh asset tùy ý, chỉnh asset trên thiết bị) | Thư viện chỉ gồm asset do asset pipeline publish (bundle trong iOS app; vault/private_vault republish từ pipeline) |
 | NG11 | Routine định kỳ tùy ý (ngoài `work_report`, `journal_nudge`) | Tập đóng để kiểm soát chất lượng |
 | NG12 | Khóa toàn app bằng PIN | Dựa vào khóa thiết bị; private có PIN riêng |
 
@@ -123,7 +125,7 @@ Hai giá trị cốt lõi phải cùng tồn tại:
 
 ### F-03 TTS
 
-- Chỉ nguồn âm thanh của Hana. Video luôn im lặng.
+- Chỉ nguồn âm thanh của Hana. Video luôn im lặng. V1 dùng `AVSpeechSynthesizer` trên iOS; backend không synthesize audio cho client iOS.
 - Giờ, ngày, số, tiền được đọc tự nhiên tiếng Việt.
 - Cài đặt: luôn đọc / chỉ khi nói bằng voice / không đọc; tốc độ; nút tắt tiếng nhanh.
 
@@ -164,7 +166,7 @@ Hai giá trị cốt lõi phải cùng tồn tại:
 ### F-09 Task & reminder
 
 - Task có hạn ngày, ưu tiên; reminder có giờ, lặp lại hằng ngày/tuần/tháng/năm.
-- Nhắc nổ đúng giờ kể cả khi không có mạng (lịch cục bộ trên Android) và **kể cả khi FCM chưa được cấu hình**; push FCM chỉ là dự phòng tùy chọn.
+- Nhắc nổ đúng giờ kể cả khi không có mạng bằng local notification iOS; cơ chế push iOS là dự phòng tùy chọn và được chốt ở phase notification.
 - Hoàn thành / hoãn (snooze) / bỏ qua từ notification.
 
 ### F-10 Work journal
@@ -192,7 +194,7 @@ Hai giá trị cốt lõi phải cùng tồn tại:
 
 ### F-14 Notifications
 
-- Kênh Android: "Nhắc việc", "Hana nhắn". Inbox trong app lưu mọi thông báo.
+- Nhóm notification iOS: "Nhắc việc", "Hana nhắn". Inbox trong app lưu mọi thông báo.
 - FCM tùy chọn: khi chưa cấu hình, reminder vẫn nổ bằng lịch cục bộ; tin Hana/báo cáo đến qua đồng bộ khi mở app và đồng bộ nền định kỳ (có thể trễ vài phút).
 - Preview mặc định chung chung cho tin Hana/báo cáo.
 
@@ -251,7 +253,7 @@ Private (route riêng, thay thế toàn bộ stack khi mở)
 1. Đăng nhập (tài khoản owner tạo sẵn bằng CLI).
 2. Giới thiệu ngắn Hana (stage `greeting` nếu có).
 3. Chọn cách xưng hô (mặc định anh/em).
-4. Cho phép notification; giải thích và xin quyền exact alarm (Android).
+4. Cho phép notification iOS; giải thích rõ local notification và mở Settings nếu người dùng từ chối.
 5. Xem/chỉnh các mặc định: chào buổi sáng 08:00, hỏi lại việc dang dở 14:00, hỏi thăm tối 21:30, quiet hours 23:00–07:00, cutoff ngày nhật ký 04:00.
 6. Vào Home; không nhắc gì đến private mode. Stage hiện silhouette trong lúc app tải thư viện clip (vault) ở nền; tải xong thì Hana chuyển sang video (`daily`). Tùy chọn hình ảnh tình cảm mặc định tắt, bật trong Cài đặt → Nhân vật & hình ảnh.
 
@@ -302,7 +304,7 @@ Private (route riêng, thay thế toàn bộ stack khi mở)
 | Thời gian | TIMEZONE_SPEC — nghiệp vụ theo giờ Việt Nam, lưu UTC |
 | Media | Mọi video app-ready không có audio stream; tiếng Hana chỉ từ TTS |
 | Khả năng bảo trì | Mọi prompt versioned; Fake gateway cho test; import-linter; test cách ly |
-| Kích thước APK | Chấp nhận ≤ 250 MB (sideload cá nhân) |
+| Kích thước iOS app/IPA | Theo ngân sách được chốt khi đóng gói iOS; asset private không bundle |
 | Pin | Không chạy nền liên tục; không ghi âm nền; video pause khi background |
 | Khả năng tiếp cận | Chữ tối thiểu 14sp, hỗ trợ font scale hệ thống, nút mic ≥ 64dp |
 
@@ -327,7 +329,7 @@ Private (route riêng, thay thế toàn bộ stack khi mở)
 |---|---|
 | A1 | (Cập nhật Phase 3.2) 43 video trong `assets_source` đều có `content_sensitivity ≥ suggestive` (Phase 3: 0 clip trang phục thường ngày). Chủ sở hữu chấp nhận dùng cả 43 theo owner asset policy; daily/assistant hiện có 15 clip (nhóm A, sensitivity `suggestive` provisional), coverage không đủ cho mọi state (`surprised`, `concerned`, `working`, `sleep`) và dựa vào fallback. Bổ sung clip trang phục thường ngày sau này chỉ cần gắn nhãn `normal` rồi publish, không đổi kiến trúc |
 | A7 | Ứng dụng cá nhân: chủ sở hữu là người duy nhất xem stage; quyết định hiển thị asset nhạy cảm ở normal zone là của chủ sở hữu và có thể đổi bất kỳ lúc nào trong Cài đặt |
-| A2 | 9Router cung cấp được model chat, STT tiếng Việt, TTS tiếng Việt chất lượng chấp nhận được qua endpoint OpenAI-compatible. **Provider STT/TTS: UNRESOLVED**, benchmark ở voice phase |
+| A2 | 9Router cung cấp model chat; Deepgram cung cấp STT tiếng Việt; iOS cung cấp ít nhất một voice `vi-VN` qua `AVSpeechSynthesizer`. Voice thực tế phải được liệt kê/QA trên thiết bị mục tiêu |
 | A3 | Có một model/route qua 9Router cho phép nội dung người lớn hư cấu cho private mode. **Provider private LLM: UNRESOLVED**, benchmark ở private mode phase |
 | A4 | FCM là **tùy chọn**: không có Firebase project thì push tắt, reminder cục bộ vẫn hoạt động đầy đủ, tin Hana/báo cáo đến qua đồng bộ nền |
 | A5 | VPS Linux có Docker, domain + TLS cho staging/production |

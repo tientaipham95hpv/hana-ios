@@ -1,0 +1,244 @@
+name: iOS unsigned validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-unsigned-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ios-unsigned:
+    name: Test, build, and package unsigned iOS
+    runs-on: macos-15
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+        working-directory: app
+    env:
+      FLUTTER_VERSION: 3.47.4
+      EVIDENCE_DIR: ${{ github.workspace }}/app/ci-evidence
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4.4.0
+
+      - name: Install exact Flutter SDK
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "$FLUTTER_VERSION" \
+            https://github.com/flutter/flutter.git flutter-sdk
+          echo "$RUNNER_TEMP/flutter-sdk/bin" >> "$GITHUB_PATH"
+
+      - name: Inspect macOS, Xcode, SDK, Flutter, and Dart
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          sw_vers | tee "$EVIDENCE_DIR/macos.txt"
+          xcodebuild -version | tee "$EVIDENCE_DIR/xcode-version.txt"
+          xcodebuild -showsdks | tee "$EVIDENCE_DIR/xcode-sdks.txt"
+          flutter --version | tee "$EVIDENCE_DIR/flutter-version.txt"
+          dart --version 2>&1 | tee "$EVIDENCE_DIR/dart-version.txt"
+          flutter doctor -v | tee "$EVIDENCE_DIR/flutter-doctor.txt"
+          flutter precache --ios
+
+      - name: Restore locked Flutter dependencies
+        run: |
+          set -euo pipefail
+          test -f pubspec.lock
+          cp pubspec.lock "$RUNNER_TEMP/pubspec.lock.before"
+          flutter pub get --enforce-lockfile
+          cmp "$RUNNER_TEMP/pubspec.lock.before" pubspec.lock
+
+      - name: Validate iOS project configuration
+        run: |
+          set -euo pipefail
+          plutil -lint ios/Runner/Info.plist | tee "$EVIDENCE_DIR/plist-lint.txt"
+          microphone_description="$(/usr/libexec/PlistBuddy \
+            -c 'Print :NSMicrophoneUsageDescription' ios/Runner/Info.plist)"
+          test -n "$microphone_description"
+
+          deployment_targets="$(sed -n \
+            's/.*IPHONEOS_DEPLOYMENT_TARGET = \([0-9][0-9.]*\);/\1/p' \
+            ios/Runner.xcodeproj/project.pbxproj | sort -u)"
+          test -n "$deployment_targets"
+          while IFS= read -r target; do
+            awk -v target="$target" 'BEGIN { exit !((target + 0) >= 13.0) }'
+          done <<< "$deployment_targets"
+          printf 'deployment_targets=%s\n' \
+            "$(tr '\n' ',' <<< "$deployment_targets" | sed 's/,$//')" \
+            | tee "$EVIDENCE_DIR/ios-project.txt"
+
+          if [[ -f ios/Podfile ]]; then
+            (cd ios && pod install --deployment)
+          else
+            echo 'CocoaPods: not required; project uses Flutter Swift Package Manager.' \
+              | tee "$EVIDENCE_DIR/cocoapods.txt"
+          fi
+
+      - name: Run Flutter static analysis
+        run: |
+          set -euo pipefail
+          flutter analyze 2>&1 | tee "$EVIDENCE_DIR/flutter-analyze.txt"
+
+      - name: Run Flutter tests
+        run: |
+          set -euo pipefail
+          flutter test 2>&1 | tee "$EVIDENCE_DIR/flutter-test.txt"
+
+      - name: Build iOS simulator app
+        run: |
+          set -euo pipefail
+          flutter build ios --simulator --debug 2>&1 \
+            | tee "$EVIDENCE_DIR/flutter-build-ios-simulator.txt"
+          test -d build/ios/iphonesimulator/Runner.app
+
+      - name: Run native iOS platform tests
+        run: |
+          set -euo pipefail
+          simulator_id="$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          data = json.load(sys.stdin)
+          for runtime, devices in data["devices"].items():
+              if "iOS" not in runtime:
+                  continue
+              for device in devices:
+                  if device.get("isAvailable") and device.get("name", "").startswith("iPhone"):
+                      print(device["udid"])
+                      raise SystemExit(0)
+          raise SystemExit(1)
+          ')"
+          test -n "$simulator_id"
+          xcrun simctl boot "$simulator_id" 2>/dev/null || true
+          xcrun simctl bootstatus "$simulator_id" -b
+          xcodebuild test \
+            -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -sdk iphonesimulator \
+            -destination "platform=iOS Simulator,id=$simulator_id" \
+            2>&1 | tee "$EVIDENCE_DIR/xcodebuild-test.txt"
+          echo 'VOICE_RUNTIME_VALIDATION_PENDING' \
+            | tee "$EVIDENCE_DIR/voice-runtime-status.txt"
+
+      - name: Build unsigned iOS device release
+        run: |
+          set -euo pipefail
+          flutter build ios --release --no-codesign 2>&1 \
+            | tee "$EVIDENCE_DIR/flutter-build-ios-release.txt"
+          test -d build/ios/iphoneos/Runner.app
+
+      - name: Audit Runner.app for client credentials
+        run: |
+          set -euo pipefail
+          app_bundle='build/ios/iphoneos/Runner.app'
+          findings="$RUNNER_TEMP/hana-secret-findings.txt"
+          : > "$findings"
+
+          while IFS= read -r -d '' candidate; do
+            printf '%s\n' "${candidate#${app_bundle}/}" >> "$findings"
+          done < <(find "$app_bundle" -type f \( \
+            -name '.env' -o -name '.env.*' -o \
+            -iname 'credentials*.json' -o -iname 'secrets*.json' -o \
+            -iname '*service-account*.json' -o \
+            -name 'GoogleService-Info.plist' -o \
+            -name 'google-services.json' -o \
+            -name '*.p8' -o -name '*.p12' -o -name '*.pem' -o \
+            -name '*.mobileprovision' \
+          \) -print0)
+
+          while IFS= read -r -d '' candidate; do
+            if strings -a "$candidate" | grep -Eiq \
+              'DEEPGRAM_API_KEY|NINE_ROUTER_API_KEY|ELEVENLABS_API_KEY|BEGIN ([A-Z]+ )?PRIVATE KEY|service[_-]?account|Authorization:[[:space:]]*Bearer[[:space:]]+[A-Za-z0-9._-]{12,}|sk[-_][A-Za-z0-9_-]{16,}|api[_-]?key["=:[:space:]]{1,8}[A-Za-z0-9._-]{20,}'; then
+              printf '%s\n' "${candidate#${app_bundle}/}" >> "$findings"
+            fi
+          done < <(find "$app_bundle" -type f -print0)
+
+          sort -u "$findings" -o "$findings"
+          if [[ -s "$findings" ]]; then
+            echo 'Credential audit failed. Potential material found in these bundle paths:'
+            sed 's/^/  - /' "$findings"
+            exit 1
+          fi
+          echo 'PASS: no provider credential marker or credential-looking file was bundled.' \
+            | tee "$EVIDENCE_DIR/client-secret-scan.txt"
+
+      - name: Package unsigned Runner.app and IPA
+        run: |
+          set -euo pipefail
+          package_root="$RUNNER_TEMP/hana-unsigned-package"
+          rm -rf "$package_root"
+          mkdir -p "$package_root/Payload"
+          ditto build/ios/iphoneos/Runner.app "$package_root/Payload/Runner.app"
+
+          (cd "$package_root" && zip -qry "$GITHUB_WORKSPACE/app/Hana-unsigned.ipa" Payload)
+          unzip -t Hana-unsigned.ipa | tee "$EVIDENCE_DIR/ipa-integrity.txt"
+          unzip -Z1 Hana-unsigned.ipa > "$EVIDENCE_DIR/ipa-entries.txt"
+          grep -q '^Payload/Runner\.app/' "$EVIDENCE_DIR/ipa-entries.txt"
+          if grep -Evq '^Payload/$|^Payload/Runner\.app/$|^Payload/Runner\.app/' \
+            "$EVIDENCE_DIR/ipa-entries.txt"; then
+            echo 'IPA contains an entry outside Payload/Runner.app.'
+            exit 1
+          fi
+
+          ditto -c -k --sequesterRsrc --keepParent \
+            build/ios/iphoneos/Runner.app Runner.app.zip
+
+      - name: Create build metadata
+        run: |
+          set -euo pipefail
+          flutter_version="$(flutter --version --machine | python3 -c \
+            'import json,sys; print(json.load(sys.stdin)["frameworkVersion"])')"
+          dart_version="$(dart --version 2>&1 | sed 's/^Dart SDK version: //')"
+          xcode_version="$(xcodebuild -version | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+          ios_sdk_version="$(xcrun --sdk iphoneos --show-sdk-version)"
+          app_version="$(awk '/^version:/ { print $2; exit }' pubspec.yaml)"
+          build_number="${app_version#*+}"
+
+          {
+            echo "git_commit=$GITHUB_SHA"
+            echo "flutter_version=$flutter_version"
+            echo "dart_version=$dart_version"
+            echo "xcode_version=$xcode_version"
+            echo "macos_version=$(sw_vers -productVersion)"
+            echo "runner_image=${ImageOS:-unknown}-${ImageVersion:-unknown}"
+            echo "ios_sdk_version=$ios_sdk_version"
+            echo "app_version=$app_version"
+            echo "build_number=$build_number"
+            echo "build_timestamp_utc=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo 'unsigned=true'
+            echo 'voice_runtime_validation=VOICE_RUNTIME_VALIDATION_PENDING'
+          } > build-info.txt
+
+      - name: Publish job summary
+        run: |
+          set -euo pipefail
+          {
+            echo '## Hana unsigned iOS validation'
+            echo
+            echo '- Flutter analyze: PASS'
+            echo '- Flutter tests: PASS'
+            echo '- iOS simulator build: PASS'
+            echo '- Native XCTest / bridge compilation: PASS'
+            echo '- Unsigned device release build: PASS'
+            echo '- Runner.app credential scan: PASS'
+            echo '- IPA structure: PASS (`Payload/Runner.app/`)'
+            echo '- Voice runtime/audio quality: `VOICE_RUNTIME_VALIDATION_PENDING`'
+            echo '- Artifact: `hana-ios-unsigned`'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload unsigned iOS artifacts
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: hana-ios-unsigned
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            app/Hana-unsigned.ipa
+            app/Runner.app.zip
+            app/build-info.txt
+            app/ci-evidence/

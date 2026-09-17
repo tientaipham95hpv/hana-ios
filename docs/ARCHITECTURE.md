@@ -1,5 +1,7 @@
 # HANA — ARCHITECTURE
 
+> **Phase 6.3 canonical override (2026-09-17):** V1 client is **Flutter iOS only**. Android source is retained only as non-gating migration residue. LLM remains backend → 9Router; STT is backend → Deepgram; TTS is Flutter → iOS platform channel → `AVSpeechSynthesizer`. The iOS client always requests `speak=false` from the backend and speaks the already-delivered reply text locally when AUTO/VOICE_REPLY/manual playback requires it. Earlier Android/APK/ADB, 9Router-STT/TTS, `just_audio` server-TTS, and server TTS-blob requirements in this document are retired for V1 wherever they conflict with this override.
+
 Phiên bản: 1.2 (Phase 1 — foundation + Final Decision Patch + Phase 3.2 Asset Policy Patch)
 Ngày: 2026-09-15
 Trạng thái: CHỐT cho implementation. Mọi thay đổi phải cập nhật tài liệu này trước khi code.
@@ -28,12 +30,12 @@ Các bảng dữ liệu chuyên biệt được định nghĩa trong spec riêng
 | # | Quyết định | Chi tiết tại |
 |---|---|---|
 | D1 | Kỳ báo cáo tháng canonical là half-open `[ngày 15 tháng trước 00:00:00, ngày 15 tháng này 00:00:00)` Asia/Ho_Chi_Minh; UI: "Từ ngày 15 tháng trước đến hết ngày 14 tháng này"; không ngày nào thuộc hai kỳ; report tạo ngày 15 (sau khi kỳ đóng) hoặc muộn hơn; "báo cáo ngày 14" nếu có chỉ là wording UI | TIMEZONE_SPEC §9.2, STANDING_INSTRUCTIONS_SPEC §4.2, WORK_JOURNAL_SPEC §6.0 |
-| D2 | **Android là target release V1. iOS ngoài phạm vi V1.** | PRD §4.2 |
+| D2 | **iOS là target release V1 duy nhất. Android ngoài phạm vi V1 acceptance.** | PRD §4.2; Phase 6.3 |
 | D3 | FCM là tùy chọn ở mọi môi trường; local reminder hoạt động đầy đủ khi FCM chưa cấu hình | §3, §8.4, §8.6 |
 | D4 | Mặc định cấu hình được: chào sáng 08:00, hỏi lại việc dang dở 14:00, hỏi thăm tối 21:30, quiet hours 23:00–07:00, cutoff ngày nghiệp vụ journal 04:00 | §7.2 `user_settings` |
 | D5 | Private unlock: PIN 6 số là credential bắt buộc và luôn là fallback; biometric chỉ là lớp tiện lợi tùy chọn, không bao giờ là credential duy nhất | PRIVACY_SPEC §5.2–§5.3 |
 | D6 | Tài liệu canonical ở `repo/docs/` | tiêu đề tài liệu |
-| D7 | Provider STT/TTS và private LLM: UNRESOLVED implementation choice, benchmark ở phase phù hợp | AI_PROTOCOL §2.5, VOICE_SPEC §2 |
+| D7 | STT = Deepgram `nova-3`/`vi`; TTS = iOS `AVSpeechSynthesizer`/`vi-VN`; private LLM vẫn chưa enable production | AI_PROTOCOL §2.5, VOICE_SPEC §2 |
 | D8 | **Asset policy (Phase 3.2, 2026-09-15):** dùng toàn bộ 43 video. Asset có hai trục tách biệt: `content_sensitivity ∈ {normal, suggestive, private}` (nội dung → cách phân phối/bảo vệ) và `allowed_modes ⊆ {daily, assistant, relationship, private}` (nơi hiển thị, owner override được). `daily`/`assistant` ưu tiên tier sensitivity thấp nhất trong pool; `relationship` chỉ khi owner bật; `private` dùng mọi asset được allow. Không yêu cầu asset riêng cho từng CoreState; thiếu → fallback, không fail build. Clip Phase 3 `reject` → `poor` + `excluded_by_default`; clip `review` → `review_flag`, không main-loop. LLM không bao giờ thấy/chọn asset; Character Engine chọn; video muted; voice chỉ TTS | CHARACTER_SYSTEM §2.5–§2.8, §4, §8.5, §11, §17; PRIVACY_SPEC §4.1; `PHASE_3_2_ASSET_POLICY_PATCH.md` |
 
 ---
@@ -41,10 +43,10 @@ Các bảng dữ liệu chuyên biệt được định nghĩa trong spec riêng
 ## 1. Tổng quan hệ thống
 
 ```
-┌──────────────────────────── Android device (Flutter app) ────────────────────────────┐
+┌──────────────────────────── iOS device (Flutter app) ────────────────────────────────┐
 │  UI (chat, reminders, journal, reports, instructions, memory, settings)              │
 │  Character Engine (pure Dart state machine) ─► VideoStage (2x video_player, muted)   │
-│  VoiceRecorder (record, PTT)     AudioPlayer (just_audio, TTS only)                  │
+│  VoiceRecorder (AVAudioRecorder) NativeTTS (AVSpeechSynthesizer, vi-VN)              │
 │  LocalStore (drift/SQLite, normal only)  SecureStore (Keystore)  Outbox              │
 │  LocalNotificationScheduler      AssetVault + PrivateVault (encrypted asset caches)  │
 └───────────────┬──────────────────────────────────────────────────────▲───────────────┘
@@ -62,7 +64,8 @@ Các bảng dữ liệu chuyên biệt được định nghĩa trong spec riêng
 │                            ▼                                                           │
 │                          postgres (schema hana, schema hana_private)                   │
 │                          blobstore (filesystem volume: media/, private_media/)         │
-│                          9router (OpenAI-compatible gateway, internal network only) ───┼─► LLM/STT/TTS providers
+│                          9router (OpenAI-compatible gateway, server-side only) ─────────┼─► LLM providers
+│                          Deepgram STT (server-side adapter)                            │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 
 ┌──────── Windows dev host (offline tooling) ────────┐
@@ -91,19 +94,19 @@ Nguyên tắc nền:
 
 | # | Component | Chạy ở | Trách nhiệm | KHÔNG ĐƯỢC |
 |---|---|---|---|---|
-| C1 | **Flutter App** | Android | UI, input text/voice, hiển thị chat, phát TTS, hiển thị video, cache normal data, outbox, local notifications, private vault | Giữ API key provider; gọi 9Router trực tiếp; lưu private message xuống disk; tự quyết định lịch nhắc thay server |
+| C1 | **Flutter App** | iOS | UI, input text/PTT, AVSpeechSynthesizer TTS, hiển thị video, cache normal data, outbox, local notifications, private vault | Giữ API key provider; gọi 9Router/Deepgram trực tiếp; lưu private message xuống disk; tự quyết định lịch nhắc thay server |
 | C2 | **Character Engine** (+ Asset Policy Engine) | Trong C1 (Dart thuần) | State machine 10 core state, stage context, chọn asset theo manifest (bundle/vault/private_vault) + owner asset policy (`content_sensitivity` × `allowed_modes`), xử lý special cue, fallback | Nhận filename/asset_id từ server/LLM; normal engine đọc private_vault manifest hoặc dùng context `private`; I/O trong reducer/policy engine |
 | C3 | **VideoStage** | Trong C1 | Phát clip muted, crossfade, loop, preload | Bật volume > 0; phát file không có trong manifest |
 | C4 | **api** (FastAPI) | Server | Auth, validate request, CRUD domain, tạo turn + enqueue, relay SSE từ Redis Stream, phục vụ media TTS, private session | Gọi LLM đồng bộ trong request (trừ health); giữ state turn trong RAM |
-| C5 | **worker** (arq) | Server | Xử lý turn (STT→context→LLM→validate→actions→reply→TTS), memory extraction, day summary, journal extraction, report generation, proactive message, push dispatch | Nhận request HTTP; thực thi action chưa validate |
+| C5 | **worker** (arq) | Server | Xử lý turn (Deepgram STT khi voice → context → LLM → validate → actions → reply), memory extraction, day summary, journal extraction, report generation, proactive message, push dispatch | Nhận request HTTP; thực thi action chưa validate; synthesize TTS cho active iOS path |
 | C6 | **scheduler** | Server (1 instance leader) | Quét DB tìm occurrence/routine đến hạn, enqueue job idempotent, materialize recurrence, catch-up sau downtime | Thực thi job nặng trực tiếp; giữ lịch chỉ trong Redis |
-| C7 | **AI Gateway Client** | Thư viện trong C5 | Gọi 9Router (chat, STT, TTS, embeddings) với timeout/retry/alias | Được import bởi C4 route handler (trừ health check) |
+| C7 | **AI Gateway Client** | Thư viện trong C5 | Gọi 9Router cho chat/embeddings với timeout/retry/alias; Deepgram adapter độc lập cho STT | Được import bởi C4 route handler (trừ health check) |
 | C8 | **Character Director** | Thư viện trong C5 | Chuẩn hóa emotion/intensity/special_cue từ LLM → `CharacterCue` hợp lệ theo mode; sinh cue cho sự kiện hệ thống (lỗi, report xong) | Chọn asset; biết filename |
 | C9 | **Voice Service** (STT/TTS adapters + SpeechNormalizer) | Thư viện trong C5 | Transcribe audio, chuẩn hóa text → speech, chia segment, synthesize, lưu blob | Dùng audio từ video |
 | C10 | **PostgreSQL 16** | Server | Lưu bền mọi dữ liệu nghiệp vụ; schema `hana` + `hana_private` | Bị expose ra internet |
 | C11 | **Redis 7** | Server | Queue arq, turn event streams, rate limit, private session, leader lock, debounce | Là nguồn sự thật duy nhất của bất kỳ dữ liệu nào |
 | C12 | **BlobStore** | Server (filesystem volume, interface cho S3 sau) | Lưu TTS audio, voice input tạm, vault assets (`ASSET_VAULT_ROOT`), private_vault assets (`PRIVATE_MEDIA_ROOT/assets`) | Được phục vụ qua static public path |
-| C13 | **9Router** | Server (internal network) / Windows host (dev) | Gateway OpenAI-compatible tới provider LLM/STT/TTS, fallback giữa provider | Được expose public; nhận request từ client |
+| C13 | **9Router** | Server (internal network) / Windows host (dev) | Gateway OpenAI-compatible tới provider LLM, fallback giữa provider | Được expose public; nhận request từ client |
 | C14 | **FCM** (tùy chọn) | Google | Gửi data message tới thiết bị khi đã cấu hình; hệ thống chạy đủ chức năng khi không có | Nhận nội dung private; trở thành phụ thuộc bắt buộc của reminder hay bất kỳ chức năng nào |
 | C15 | **Asset Pipeline** | Windows dev host | Phân tích, gắn nhãn, transcode muted, sinh manifest, verify | Ghi/sửa/xóa `assets_source` |
 
@@ -160,13 +163,13 @@ Flutter: `lib/features/private/**` chỉ được import từ `lib/app/router.da
 | api | Docker Compose (hoặc `uvicorn` trong venv khi debug) | `0.0.0.0:8000` (LAN để thiết bị thật truy cập) |
 | worker, scheduler | Docker Compose | — |
 | 9router | Chạy trên Windows host (Node) | `http://host.docker.internal:20128/v1` từ container |
-| Flutter | Android emulator (`http://10.0.2.2:8000`) hoặc thiết bị thật trên LAN (`http://<LAN_IP>:8000`) | — |
+| Flutter iOS | iOS Simulator (`http://127.0.0.1:8000`) hoặc iPhone trên LAN (`https://<DEV_HOST>`) | — |
 | asset pipeline | Python 3.11 venv + ffmpeg trên host | — |
 
-- Cleartext HTTP chỉ được phép trong build flavor `dev` (Android `networkSecurityConfig` riêng cho flavor). Flavor `staging`/`prod` PHẢI HTTPS.
+- Cleartext HTTP chỉ được phép cho local iOS Simulator dev với ATS exception tối thiểu; staging/prod PHẢI HTTPS và không có broad ATS exception.
 - Container đặt `TZ=UTC`. Postgres `timezone = 'UTC'`.
-- FCM là tùy chọn (local, staging, production): nếu `FCM_ENABLED=false` hoặc thiếu `FCM_SERVICE_ACCOUNT_FILE`/`google-services.json`, dispatcher ghi notification in-app với `push_state=skipped_unconfigured`, không lỗi. Chi tiết hành vi không FCM: §8.6.
-- Target build: **Android** (flavor `dev|staging|prod`). Không có target iOS trong V1.
+- Push iOS/APNs là tùy chọn cho đến phase notification: khi chưa cấu hình, dispatcher ghi notification in-app với `push_state=skipped_unconfigured`, không lỗi. Local notification đã đồng bộ vẫn hoạt động.
+- Target build V1: **iOS**. Minimum verification build là `flutter build ios --release --no-codesign` trên macOS/Xcode; Android không thuộc release gate.
 
 ### 3.2 Staging / Production (VPS)
 
@@ -188,8 +191,7 @@ Flutter: `lib/features/private/**` chỉ được import từ `lib/app/router.da
 | Ghi âm PTT, đo độ dài, hủy | ✔ | |
 | STT | | ✔ (worker → 9Router) |
 | LLM | | ✔ |
-| TTS synthesize | | ✔ |
-| Phát TTS audio | ✔ | |
+| TTS synthesize/phát (`AVSpeechSynthesizer`) | ✔ | |
 | Quyết định core state + chọn asset (Asset Policy Engine) | ✔ (Character Engine) | |
 | Chuẩn hóa emotion từ LLM thành cue hợp lệ + tính `stage_context` xác định | | ✔ (Character Director) |
 | Lưu owner asset policy (nguồn sự thật) | cache drift | ✔ `hana.asset_policy*`, `hana_private.private_asset_policy_overrides` |
@@ -219,7 +221,7 @@ Flutter: `lib/features/private/**` chỉ được import từ `lib/app/router.da
 | Private memories | ✔ (ciphertext) | ✘ (chỉ RAM khi xem trong private) | |
 | Tasks / reminders / occurrences | ✔ | drift cache occurrences 14 ngày tới | để local notification hoạt động offline |
 | Outbox (text chưa gửi) | — | drift | chỉ normal |
-| Asset `bundle` (chỉ `content_sensitivity=normal`) + `bundle_manifest.json` | ✘ | bundle APK | seed Phase 3.2: 0 video, chỉ `fallback.png` |
+| Asset `bundle` (chỉ `content_sensitivity=normal`) + `bundle_manifest.json` | ✘ | iOS app bundle | seed Phase 3.2: 0 video, chỉ `fallback.png` |
 | Asset `vault` + `vault_manifest.json` | ✔ `ASSET_VAULT_ROOT` | cache mã hóa `app_support/asset_vault/` | runtime giải mã vào `cache/vault_rt/` (normal) hoặc `cache/prv_rt/` (private); xóa khi logout (PRIVACY_SPEC §4.1) |
 | Asset `private_vault` + `private_vault_manifest.json` | ✔ `PRIVATE_MEDIA_ROOT/assets` | cache mã hóa `app_support/prv_assets/` | runtime giải mã vào `cache/prv_rt/`, xóa khi khóa |
 | Owner asset policy | ✔ `hana.asset_policy`, `hana.asset_policy_overrides`; `hana_private.private_asset_policy_overrides` | drift cache (chỉ normal); private overrides chỉ RAM | |
@@ -311,7 +313,7 @@ Thư viện đã chốt:
 
 - Backend (Python 3.11): FastAPI, uvicorn, pydantic v2, pydantic-settings, SQLAlchemy 2 (async) + asyncpg, alembic, arq, redis-py, httpx, pyjwt, argon2-cffi, cryptography, structlog, rapidfuzz, python-multipart, pytest, pytest-asyncio, time-machine, import-linter.
 - Postgres extensions: `pg_trgm`, `unaccent`, `pgcrypto` (gen_random_uuid dự phòng), `btree_gist` (exclusion constraint kỳ báo cáo). `pgvector` tùy chọn (MEMORY_SPEC §7.4).
-- Flutter (Android): riverpod, go_router, dio, drift, flutter_secure_storage, video_player, just_audio, audio_session, record, permission_handler, flutter_local_notifications, workmanager, firebase_messaging (**tùy chọn** — app build và chạy được khi không có `google-services.json`), local_auth (chỉ kiểm tra khả dụng biometric), timezone, uuid, cryptography (hoặc pointycastle) cho AES-GCM. Ký challenge biometric dùng MethodChannel `hana/biometric_key` (Kotlin: Android Keystore + BiometricPrompt, PRIVACY_SPEC §5.2).
+- Flutter (iOS): riverpod, dio, drift, flutter_secure_storage, video_player, native platform channels for `AVSpeechSynthesizer`/`AVAudioRecorder`/`AVAudioSession`, local notifications, local_auth, timezone, uuid, cryptography. Existing Android dependencies/source may remain temporarily but are non-gating.
 
 ---
 
@@ -677,7 +679,7 @@ Chi tiết từng bước:
 3. api validate → transaction: insert `turns(state=queued)`, `messages(role=user, origin=chat)`. Trùng `client_id` → trả turn cũ.
 4. Enqueue `process_turn` vào queue `hana:normal`, `_job_id = "turn:" + turn_id`.
 5. Worker chạy pipeline theo state machine §9. Timeout tổng cho turn: 60 giây đến `reply_ready`.
-6. Sau `reply_ready`: nếu `speak` và settings cho phép → TTS (VOICE_SPEC §7). TTS lỗi không làm turn fail.
+6. Sau `reply.ready`: text hiển thị ngay. iOS client tự quyết định native speech theo AUTO/TEXT_ONLY/VOICE_REPLY và gọi `AVSpeechSynthesizer`; backend turn không chờ TTS. TTS lỗi/cancel không làm turn fail.
 7. `turn.completed` → client xóa outbox, bubble `sent`.
 8. Hậu kỳ: enqueue `memory_extract` debounce (MEMORY_SPEC §6.1).
 
@@ -717,7 +719,7 @@ server down, trễ > 6h khi scheduler quét ────────► missed (
 Quy tắc:
 
 1. **Tạo:** validate `due_local` ≥ `now_local + 30s` (TIMEZONE_SPEC §8). Tính `due_at`. Materialize occurrences trong cửa sổ `[today_local, today_local + 14 ngày]`.
-2. **Client scheduling:** khi nhận reminder (qua receipt, REST, hoặc `GET /v1/reminders/sync`), client đặt `flutter_local_notifications` exact alarm cho occurrences trong 7 ngày tới, notification id = hash ổn định 31-bit của `occurrence_id`, rồi gọi `ack-scheduled`. Nếu Android từ chối exact alarm permission → client vẫn đặt alarm `inexactAllowWhileIdle` và **không** ack; khi FCM đã cấu hình server push dự phòng, khi chưa cấu hình alarm inexact là cơ chế duy nhất và UI hiện cảnh báo "Nhắc nhở có thể trễ vài phút — cấp quyền Báo thức chính xác".
+2. **Client scheduling:** khi nhận reminder (qua receipt, REST, hoặc `GET /v1/reminders/sync`), iOS client đặt local notification cho occurrences trong 7 ngày tới, notification id ổn định từ `occurrence_id`, rồi gọi `ack-scheduled`. Nếu quyền notification bị từ chối, client không ack và UI hướng dẫn mở Settings; server/in-app inbox giữ trạng thái nguồn sự thật.
 3. **Scheduler (mỗi 15s):** chọn occurrences `state IN ('scheduled','locally_scheduled') AND due_at <= now()` với `FOR UPDATE SKIP LOCKED LIMIT 100`:
    - `locally_scheduled` và `local_ack_version = reminders.version` và device không bị revoke → `fired_local`, không push, tạo notification inbox `push_state=skipped_local`.
    - ngược lại, FCM đã cấu hình → `dispatched`, enqueue `push_reminder` `_job_id="push:rem:"+occurrence_id`.
@@ -745,7 +747,7 @@ Quy tắc:
 - Push FCM (**tùy chọn**, chỉ khi đã cấu hình): **data-only**, priority high, payload `{type, notification_id, title, body, deep_link}`; client tự hiển thị qua `flutter_local_notifications` trên channel `reminders` hoặc `companion`. Retry 3 lần (30s, 2m, 5m). Token invalid → xóa `devices.fcm_token`.
 - **Khi FCM chưa cấu hình** (hành vi đầy đủ, không phải lỗi):
   - Reminder: local exact alarm là cơ chế chính và đủ (§8.4 bước 2) — hoạt động offline, không cần server lúc nổ.
-  - Client đồng bộ `GET /v1/reminders/sync` + `GET /v1/notifications?after=` + `GET /v1/messages/sync` khi: app mở/resume; mỗi 60 s khi app foreground; và bằng `workmanager` periodic task Android (chu kỳ tối thiểu hệ thống cho phép, mục tiêu 15 phút, cần mạng).
+  - Client đồng bộ `GET /v1/reminders/sync` + `GET /v1/notifications?after=` + `GET /v1/messages/sync` khi app mở/resume và mỗi 60 s khi foreground. Background refresh iOS dùng `BGTaskScheduler` theo best effort; không giả định chu kỳ chính xác.
   - Background sync tìm thấy notification `companion|report|instruction` chưa hiển thị → tạo local notification (dedupe theo `notification_id`); occurrence mới/đổi → đặt lại exact alarm + ack.
   - Proactive message và report vì vậy có thể đến trễ tới chu kỳ background sync; reminder không bị trễ.
   - `devices.fcm_token` null; server không cố gửi push.
@@ -875,7 +877,7 @@ loop mỗi 15 giây:
 6. CORS tắt (không web client).
 7. Upload: kiểm tra MIME bằng `ffprobe`, giới hạn size, lưu tên file do server sinh.
 8. Log: structlog JSON; bộ lọc redaction xóa các key `text`, `content`, `transcript`, `reply`, `prompt`, `audio`, `pin`, `password`, `token` ở mọi mức log; private logger chỉ log id + mã lỗi (INV-15).
-9. Android: `android:allowBackup="false"`, `dataExtractionRules` loại trừ toàn bộ; release build R8 obfuscation; không log nội dung trong release.
+9. iOS: Keychain/file-protection entitlements được audit ở security phase; không log nội dung trong release. Android hardening cũ không còn là V1 gate.
 
 ---
 
@@ -920,7 +922,7 @@ Failure mode chuyên biệt: CHARACTER_SYSTEM §14, VOICE_SPEC §11, MEMORY_SPEC
 | INV-02 | LLM và backend không bao giờ gửi/quyết định filename, path, asset_id, URL video. Character Engine chỉ nhận `CharacterCue` (enum). | JSON schema envelope, test fuzz, client parser chỉ nhận enum |
 | INV-03 | Mọi video app-ready có 0 audio stream; player volume = 0 và `mixWithOthers=true`. Giọng Hana chỉ từ TTS. | `verify.py` fail build, unit test manifest, widget test |
 | INV-04 | Code path normal không đọc/ghi dữ liệu private. | DB role grants, import-linter, router tách, test integration |
-| INV-05 | (Sửa Phase 3.2) Asset `content_sensitivity ≥ suggestive` không bao giờ nằm trong APK/AAB (APK chỉ chứa `bundle` = `normal`). Asset `delivery=private_vault` không có trong bundle/vault manifest, chỉ tải qua private session. Normal engine không load private_vault manifest. | build check quét APK, validator `manifest_kind`, test ISO-08/09/27 |
+| INV-05 | Asset `content_sensitivity ≥ suggestive` không bao giờ nằm trong iOS app bundle/IPA (bundle chỉ `normal`). Asset `delivery=private_vault` không có trong bundle/vault manifest, chỉ tải qua private session. Normal engine không load private_vault manifest. | build check quét app/IPA, validator `manifest_kind`, test ISO-08/09/27 |
 | INV-06 | Không notification (push/local/inbox) nào được tạo từ private mode hoặc chứa nội dung private. | không có code path; action private không có loại notification; test |
 | INV-07 | Private mode chỉ mở bằng thao tác UI chủ động + PIN server xác minh. LLM, scheduler, notification, deep link không mở được. App luôn khởi động ở normal mode. | router guard, test |
 | INV-08 | LLM không ghi DB trực tiếp; mọi side effect qua action đã validate bởi domain service. | kiến trúc orchestrator, test |

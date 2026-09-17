@@ -1,5 +1,9 @@
 # HANA — VOICE SPEC (Push-to-talk, STT, TTS)
 
+> **Phase 6.3 active V1 contract (2026-09-17; supersedes conflicting sections below):** Client target is iOS only. PTT records with `AVAudioRecorder` under `AVAudioSession`; audio is uploaded to Hana and transcribed server-side by Deepgram (`nova-3`, `vi`). Reply text is delivered through SSE before any speech. Speech output is local `AVSpeechSynthesizer` with `vi-VN`; Flutter never requests server TTS for the active iOS path. AUTO speaks PTT replies but not typed replies; TEXT_ONLY never auto-speaks; VOICE_REPLY auto-speaks when auto-play is on; every assistant message has manual speak/stop. ElevenLabs/9Router audio and `tts.segment` playback remain legacy optional compatibility only and are not V1 acceptance dependencies.
+
+Native utterances carry `turn_id:generation`. Flutter accepts start/finish/cancel/failure callbacks only for the current token, so a stopped utterance cannot mutate a newer turn. Backgrounding, audio interruption, route loss, or PTT barge-in stops speech/recording, deactivates the audio session, and converges the Character Engine out of `listening`/`talking`. Voice selection is never hard-coded: Voice Lab enumerates installed voices whose locale begins with `vi`, shows name/identifier/locale/quality, and persists an optional identifier plus rate/pitch/volume.
+
 Phiên bản: 1.1 (Phase 1 + Final Decision Patch) · Vị trí canonical: `repo/docs/` · Quyết định chốt: ARCHITECTURE §0.1
 Phụ thuộc: `ARCHITECTURE.md` §6.3–§6.4, §8.2, §9; `CHARACTER_SYSTEM.md` §7–§9; `AI_PROTOCOL.md` §2, §6; `PRIVACY_SPEC.md` §5.
 
@@ -9,7 +13,7 @@ Phụ thuộc: `ARCHITECTURE.md` §6.3–§6.4, §8.2, §9; `CHARACTER_SYSTEM.md
 
 1. **Giọng Hana chỉ đến từ TTS.** Không bao giờ dùng audio từ video (INV-03).
 2. **Push-to-talk, không always-listening.** Không wake word, không ghi âm nền, không duplex streaming ở v1.
-3. **STT và TTS chạy trên server** qua 9Router (key provider không ở thiết bị — INV-14).
+3. **STT chạy server-side qua Deepgram; TTS chạy local trên iOS qua AVSpeechSynthesizer.** Deepgram/9Router key không ở thiết bị (INV-14); native TTS không cần cloud key.
 4. **Text là nguồn gốc, giọng là phụ.** Lỗi TTS không làm mất câu trả lời; lỗi STT không tạo tin nhắn rỗng.
 5. **Text hiển thị và text đọc tách biệt**: `display_text` (lưu DB) → `speech_text` (sinh xác định bởi `SpeechNormalizer`).
 6. **Private voice không để lại dấu vết trên disk thiết bị** và bị xóa khỏi server sớm nhất có thể.
@@ -21,11 +25,11 @@ Phụ thuộc: `ARCHITECTURE.md` §6.3–§6.4, §8.2, §9; `CHARACTER_SYSTEM.md
 | Component | Vị trí | Trách nhiệm |
 |---|---|---|
 | `PttController` | Flutter `features/voice/` | Gesture giữ-để-nói, cancel zone, giới hạn thời lượng, phát event cho Character Engine |
-| `VoiceRecorder` | Flutter | Bọc package `record`; cấu hình §4; đo amplitude |
+| `VoiceRecorder` | Flutter + iOS platform channel | `AVAudioRecorder`, permission, interruption/route handling, temp M4A |
 | `VoiceUploader` | Flutter | `POST /v1/turns/voice` (hoặc private) |
-| `TtsQueue` | Flutter `features/voice/tts_queue.dart` | Nhận `tts.segment`, tải bytes vào RAM, phát tuần tự bằng `just_audio`, gate, barge-in |
+| `IosNativeTtsQueue` | Flutter + iOS platform channel | Gửi reply text + voice settings tới `AVSpeechSynthesizer`; correlate callback bằng utterance generation; gate/barge-in |
 | `AudioSessionManager` | Flutter | Package `audio_session`, cấu hình speech, xử lý interruption |
-| `SttService` | Backend `domain/voice/stt.py` | Validate audio, gọi 9Router, lọc transcript |
+| `SttService` | Backend `domain/voice/stt.py` | Validate audio, gọi Deepgram, lọc transcript |
 | `SpeechNormalizer` | Backend `domain/voice/speech_normalizer.py` | display → speech text (§6) |
 | `Segmenter` | Backend `domain/voice/segmenter.py` | Chia speech text thành segment (§7.3) |
 | `TtsService` | Backend `domain/voice/tts.py` | Synthesize, lưu blob, cache, emit event |
@@ -46,7 +50,7 @@ class TtsProvider(Protocol):
 
 Implement mặc định: `NineRouterSttProvider`, `NineRouterTtsProvider`. Test: `FakeSttProvider` (trả transcript định sẵn), `FakeTtsProvider` (trả mp3 im lặng có độ dài tỉ lệ số ký tự).
 
-**Provider STT/TTS upstream: UNRESOLVED.** Chưa chốt model/voice cụ thể sau 9Router; sẽ benchmark ở voice phase (tiêu chí AC-VOC-11, AC-TTS-10, độ trễ §13, chi phí). Lựa chọn chỉ thay đổi `STT_MODEL`, `TTS_MODEL`, `TTS_VOICE`, `STT_INPUT_FORMAT`, `STT_PROMPT_SUPPORTED`, `TTS_STYLE_SUPPORTED` — không đổi interface.
+**Provider active V1:** STT = Deepgram `nova-3`, language `vi`; TTS = iOS `AVSpeechSynthesizer`, language `vi-VN`, voice identifier selected from installed voices. ElevenLabs adapter may remain inactive on the backend but no key or live ElevenLabs call is required.
 
 ---
 
@@ -110,7 +114,7 @@ awaiting_transcript ──turn.failed(STT_*)──► idle (bubble fallback)
 | Sample rate | 16.000 Hz |
 | Channels | 1 |
 | Bitrate | 48 kbps |
-| Android audio source | `VOICE_RECOGNITION` nếu hỗ trợ, else `MIC` |
+| iOS audio source | `AVAudioRecorder` + `AVAudioSession.playAndRecord`; AAC/M4A, 16 kHz mono |
 | AGC / echo cancel / noise suppress | bật nếu thiết bị hỗ trợ |
 | Thời lượng | 400 ms … 60.000 ms |
 | File normal | `<cache>/voice/<client_id>.m4a` |
@@ -154,7 +158,7 @@ api:
 7. Private: xóa blob audio **ngay** sau bước 3 (thành công hoặc thất bại). Normal: giữ theo `expires_at` (24 h) để debug, không ai đọc lại trừ job cleanup.
 8. Tiếp tục `context_building` như text turn.
 
-### 5.3 Gọi 9Router
+### 5.3 Gọi Deepgram
 
 ```
 POST {NINE_ROUTER_BASE_URL}/audio/transcriptions
@@ -263,6 +267,15 @@ Mẫu: `{giờ} giờ[ {phút}] {buổi}`. `08:00` → `tám giờ sáng`; `12:0
 ---
 
 ## 7. TTS
+
+### 7.0 Active iOS-native path (Phase 6.3)
+
+1. Backend persists/emits `reply.ready`; it does not synthesize audio for an iOS-native request (`speak=false`).
+2. Flutter renders text immediately, resolves response mode locally, and calls `hana/native_tts.speak` only when required.
+3. Native code chooses the configured installed `vi-VN` identifier or the system `vi-VN` default, then applies bounded rate `0.10…0.65`, pitch `0.50…2.00`, and volume `0…1`.
+4. `AVSpeechSynthesizerDelegate` emits `speechStarted`, `speechFinished`, and `speechCancelled`. Setup/runtime errors are returned as platform errors and settle the engine without removing text.
+5. `AVAudioSession` uses `playAndRecord`/`spokenAudio` for speech and `playAndRecord`/`measurement` for PTT. Starting one path stops the other. Interruption, old-route loss, and backgrounding cancel active work and deactivate the session.
+6. Sections 7.1–8 describing server synthesis/audio blobs are retained only for the inactive compatibility adapter. They are not the active iOS V1 path.
 
 ### 7.1 Thời điểm
 

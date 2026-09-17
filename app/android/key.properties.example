@@ -1,0 +1,5 @@
+# Do not commit key.properties or the keystore.
+storeFile=C:/secure/path/hana-release.jks
+storePassword=replace-via-local-secret
+keyAlias=hana
+keyPassword=replace-via-local-secret
