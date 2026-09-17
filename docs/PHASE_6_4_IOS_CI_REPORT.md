@@ -1,143 +1,133 @@
-# Phase 6.4 — iOS CI and unsigned IPA
+# Phase 6.4.1 - iOS CI manifest regression
 
-Date: 2026-09-17. Scope: Phase 6.4 only. Phase 7 was not started.
+Date: 2026-09-17. Scope: Phase 6.4.1 only. Phase 7 was not started.
 
 ## Verdict
 
-**PHASE 6.4 — BLOCKED.** The macOS workflow, locked Flutter setup, native XCTest coverage, simulator/device build gates, unsigned IPA packaging, bundle credential audit, metadata, and artifact upload are implemented. A successful GitHub Actions run cannot yet be produced from this checkout because it has no Git remote and this host has no authenticated GitHub tooling. The PASS gate explicitly requires a completed macOS run, so local Windows results are not substituted for that evidence.
+**PHASE 6.4.1 - PASS.** The canonical manifest regression is fixed, all 146 Flutter tests pass in GitHub Actions, and the simulator, native XCTest, unsigned device build, IPA integrity, credential audit, and artifact upload gates all pass.
 
-## Workflow
+Successful run: [iOS unsigned validation #4](https://github.com/tientaipham95hpv/hana-ios/actions/runs/35196881477)
 
-- File: `.github/workflows/ios-unsigned.yml`
-- Trigger: manual `workflow_dispatch` only; no paid/live provider test runs automatically.
-- Runner: `macos-15`, a supported non-preview GitHub-hosted macOS label.
-- Permissions: read-only repository contents.
-- Concurrency: one run per ref; a newer run cancels an obsolete in-progress run.
-- Timeout: 60 minutes.
-- Flutter: exact `3.47.4` tag, matching `.metadata` revision `9584c6713b324636289d067944a46fd6b49df14b`.
-- Dependencies: `flutter pub get --enforce-lockfile` followed by a byte comparison of `pubspec.lock`; no dependency upgrade is performed.
-- CocoaPods: `pod install --deployment` only when an iOS `Podfile` exists. This project currently uses Flutter Swift Package Manager, so CocoaPods is not required.
+- Run ID: `35196881477`
+- Tested commit: `ee05e96f9934562dcfcb5177c1b1c34dbec61aec`
+- Status: `completed / success`
+- Started: `2026-09-17T07:54:30Z`
+- Completed: `2026-09-17T08:05:34Z`
 
-The workflow records `flutter doctor -v`, Flutter/Dart versions, Xcode version, available SDKs, and macOS image information without reading or injecting provider secrets.
+## Manifest root cause
 
-## Static and project validation
+There was no canonical/runtime schema difference. The original CI failure never reached sanitization or comparison. The test opened this workstation-only path:
 
-The workflow fails on any of the following:
+`../../assets_processed/hana/character_manifest.json`
 
-- `flutter analyze` failure;
-- any Flutter test failure;
-- invalid `Info.plist`;
-- missing `NSMicrophoneUsageDescription`;
-- missing or invalid iOS deployment target (minimum accepted by the gate is iOS 13; the project target is iOS 15);
-- missing simulator `Runner.app`;
-- native XCTest failure;
-- missing unsigned device `Runner.app`;
-- client credential marker/file finding;
-- corrupt or incorrectly structured IPA;
-- missing artifact file.
+That path resolves outside the Git repository. It exists in the local Hana workspace, so the isolated test passed locally, but it does not exist in a clean GitHub Actions checkout. Run `35193206031` therefore failed with:
 
-Local re-validation on this Windows host after the Phase 6.4 changes:
+`PathNotFoundException: Cannot open file, path = '../../assets_processed/hana/character_manifest.json'`
+
+The regression was a non-hermetic test fixture/path dependency, closest to category F (platform/checkout path difference), not a canonical data change, stale runtime snapshot, sanitizer regression, ordering issue, normalization mismatch, or accidental canonical mutation.
+
+The repair commits an exact repository-owned Phase 4 master fixture at `app/test/fixtures/phase4_master_manifest.json` and points the test at it. The fixture is text-identical to the original processed master after normalizing line endings. The test now compares the complete sanitized JSON object with the checked-in runtime JSON before loading it, so unknown omissions or additions cannot hide behind the previous selected-field checks. Dart map/list equality remains semantic and does not depend on JSON object key order.
+
+Neither `app/tool/sanitize_phase4_manifest.dart` nor `app/assets/character/character_manifest.json` was changed. Original processed source assets and the external canonical master were not modified.
+
+## Preserved manifest invariants
+
+Local inspection and the manifest/security suite confirm:
+
+- exactly 43 assets and 43 unique sequential IDs;
+- 41 enabled by default and 2 excluded by default;
+- `chr_011` and `chr_022` remain `poor`, excluded by default, one-shot, and weight `0.2`;
+- 19 review-flagged assets remain present;
+- audio, subtitle, data, and attached-picture stream totals are all zero;
+- path traversal and Windows absolute paths are rejected;
+- forbidden shipping metadata and unknown metadata are rejected;
+- invalid sensitivity/modes, delivery association, and private-vault policy fail closed;
+- `allowed_modes`, `content_sensitivity`, vault delivery, and sanitized runtime schema remain enforced.
+
+## Additional CI findings closed
+
+After the manifest test passed in Actions, two existing downstream CI issues became visible:
+
+1. Xcode 16.4 reported that `registrar(forPlugin:)` returns an optional `FlutterPluginRegistrar`. `AppDelegate.swift` now safely unwraps it before registering `HanaNativeBridge`.
+2. The compiled-bundle audit used `sk[-_]...`, which can match ordinary compiled symbol substrings such as `sk_queue_identifier` inside `task_queue_identifier`. The workflow change is evidence-based: it requires a boundary-delimited `sk-...` token, preserves provider-name, bearer-token, PEM, service-account, generic API-key, and credential-file checks, and consumes the complete `strings` stream to avoid a `grep -q` broken-pipe diagnostic.
+
+No other workflow behavior or validation gate was changed.
+
+## Files changed
+
+- `app/test/fixtures/phase4_master_manifest.json` - repository-owned canonical Phase 4 test fixture.
+- `app/test/manifest_loader_test.dart` - hermetic fixture path plus complete sanitized-runtime semantic equality.
+- `app/ios/Runner/AppDelegate.swift` - unwrap optional Flutter plugin registrar required by Xcode 16.4.
+- `.github/workflows/ios-unsigned.yml` - remove the demonstrated compiled-symbol credential-scan false positive without removing security checks.
+- `docs/PHASE_6_4_IOS_CI_REPORT.md` - this final evidence report.
+
+## Local verification
+
+Run from `app/` on Windows with Flutter `3.47.4` / Dart `3.13.3`:
 
 | Check | Result |
 |---|---|
-| `flutter analyze` | **PASS — no issues** |
-| `flutter test` | **146 passed** |
-| Workflow YAML load/static inspection | **PASS; all 13 shell blocks pass `bash -n`** |
-| `git diff --check` for Phase 6.4 files | **PASS** |
-| Flutter/iOS source credential and provider-model scan | **PASS** |
+| Isolated canonical/runtime regression test | PASS, 1/1 |
+| `flutter test test/manifest_loader_test.dart` | PASS, 20/20 |
+| `flutter test` | PASS, 146/146 |
+| `flutter analyze` | PASS, no issues |
+| Secret-pattern scan of changed manifest/test files | PASS, no finding |
+| `git diff --check` before commits | PASS |
 
-These local results validate shared Dart code only; they are not counted as the required macOS/iOS build evidence.
+## GitHub Actions evidence
 
-## iOS simulator and native tests
+The successful run used:
 
-The workflow performs:
+- runner: `macos-15`, image `macos15-20260907.0337.1`;
+- macOS `15.7.9`;
+- Xcode `16.4`, build `16F6`;
+- iOS device and simulator SDK `18.5`;
+- Flutter `3.47.4`;
+- Dart `3.13.3` on `macos_arm64`.
 
-1. `flutter build ios --simulator --debug` and verifies `build/ios/iphonesimulator/Runner.app`.
-2. Selection and boot of an available iPhone simulator.
-3. `xcodebuild test` for the `Runner` scheme using the simulator's normal local/ad-hoc handling; no Apple certificate or provisioning profile is supplied.
+All final-run gates passed:
 
-`RunnerTests.swift` now verifies:
-
-- `AVSpeechSynthesizer` initializes in an idle state;
-- every installed Vietnamese voice exposes non-empty canonical name/identifier/locale metadata;
-- the microphone usage description exists.
-
-Flutter tests continue to cover platform-channel start/finish/cancel callbacks, stale utterance suppression, interruption/background lifecycle, and Character Engine convergence. CI always records `VOICE_RUNTIME_VALIDATION_PENDING`: headless compilation and metadata tests do not certify audible Vietnamese quality, and an absent `vi-VN` voice asset does not fail the build.
-
-The simulator XCTest host validates launch/bridge compilation. A separate brittle UI/audio-hardware smoke test is intentionally not added; physical-device Voice Lab evaluation remains the appropriate runtime gate.
-
-## Unsigned device build and IPA
-
-The workflow runs `flutter build ios --release --no-codesign` and requires:
-
-`build/ios/iphoneos/Runner.app`
-
-It copies that app to `Payload/Runner.app`, creates `Hana-unsigned.ipa` with `zip`, runs an archive integrity test, and rejects entries outside the expected payload hierarchy. It also creates `Runner.app.zip` for direct inspection. No identity, certificate, provisioning profile, or fake signature is created.
-
-## Client security audit
-
-Before packaging, every file in the built `Runner.app` is checked for:
-
-- provider secret environment variable markers for Deepgram, 9Router, and ElevenLabs;
-- private-key and service-account markers;
-- `.env`, service-account JSON, provider config plist/JSON, private key, certificate, and provisioning-profile filenames.
-
-Only paths are printed on failure; matching content is never printed. The scan intentionally does not mistake the `flutter_secure_storage` framework name for a credential file. Deepgram and 9Router remain backend-only, and no provider secret is supplied to this workflow.
-
-Built-bundle scan result: **PENDING the first macOS Actions run.** The Phase 6.3 source/client scan remains PASS, but it cannot replace inspection of the compiled app.
-
-## Build metadata and artifacts
-
-`build-info.txt` contains:
-
-- Git commit SHA;
-- Flutter and Dart versions;
-- Xcode and iOS SDK versions;
-- macOS and GitHub runner-image versions;
-- app version and build number;
-- UTC build timestamp;
-- `unsigned=true`;
-- voice runtime status.
-
-Expected Actions artifact name: **`hana-ios-unsigned`** (14-day retention), containing:
-
-- `Hana-unsigned.ipa`;
-- `Runner.app.zip`;
-- `build-info.txt`;
-- analysis, test, build, Xcode, plist, IPA, and secret-scan evidence files under `ci-evidence/`.
-
-Artifact status: **NOT CREATED — no GitHub Actions run exists yet.**
-
-## Required run evidence
-
-| Gate | Status |
+| Gate | Evidence |
 |---|---|
-| GitHub Actions macOS workflow | **BLOCKED — no repository remote/run** |
-| Xcode version / iOS SDK | **PENDING — captured by workflow** |
-| Flutter analyze | **PASS locally; CI PENDING** |
-| Flutter tests | **146 passed locally; CI PENDING** |
-| Simulator build | **PENDING** |
-| Native TTS bridge compilation/XCTest | **PENDING** |
-| Device release `--no-codesign` build | **PENDING** |
-| `Runner.app` produced | **PENDING** |
-| Unsigned IPA and payload verification | **PENDING** |
-| Built-client secret scan | **PENDING** |
-| `hana-ios-unsigned` artifact upload | **PENDING** |
+| Flutter analyze | PASS, no issues found |
+| Flutter tests | PASS, 146 passing lines, 0 failures; both manifest snapshot tests pass |
+| Simulator build | PASS; `build/ios/iphonesimulator/Runner.app` produced |
+| Native XCTest | PASS; 3/3 RunnerTests pass and Xcode reports `TEST SUCCEEDED` |
+| Device release | PASS; `flutter build ios --release --no-codesign` produced `build/ios/iphoneos/Runner.app` (18.6 MB) |
+| Built-client credential audit | PASS |
+| IPA packaging/integrity | PASS; all entries are under `Payload/Runner.app/`, and `unzip -t` reports no errors |
+| Artifact upload | PASS |
 
-Exact blocker evidence from this checkout:
+Native XCTest passed:
 
-- `git remote -v`: no entries;
-- current branch: `main`;
-- `gh --version`: command not installed;
-- therefore there is no Actions run ID/URL, commit on GitHub, or downloadable artifact that can be truthfully reported.
+- `testMicrophoneUsageDescriptionIsPresent`
+- `testSpeechSynthesizerInitializesIdle`
+- `testVietnameseVoiceEnumerationMetadataIsCanonical`
 
-To close the gate, attach this checkout to the intended GitHub repository, commit/push the Phase 6 code plus `.github/workflows/ios-unsigned.yml`, dispatch **iOS unsigned validation**, and retain the successful run URL/ID and artifact digest. No Apple signing or provider secret is needed.
+As designed, subjective voice/audio validation remains `VOICE_RUNTIME_VALIDATION_PENDING`; it is not an unsigned CI gate.
 
-## External items intentionally pending
+## Artifact and unsigned IPA
 
-- Deepgram live STT: still pending a backend-only credential; not a Phase 6.4 gate.
-- Grok 4.6/4.5: latest live verification returned HTTP 503; not an iOS build blocker and routing was not changed.
-- Vietnamese voice choice and subjective quality: pending Voice Lab validation on a physical iPhone.
-- Physical-iPhone install: pending and not required for this unsigned CI phase.
+- Artifact name: `hana-ios-unsigned`
+- Artifact ID: `10486237372`
+- Artifact size: `15,722,017` bytes
+- Artifact digest: `sha256:7739d2754c8080f55f768dabbe182d840fdf92769a188f137a18b6a5ef8e38d1`
+- Expires: `2026-10-01T08:05:30Z`
+- Direct run artifact: [hana-ios-unsigned](https://github.com/tientaipham95hpv/hana-ios/actions/runs/35196881477/artifacts/10486237372)
 
-Android acceptance, ElevenLabs, App Store signing, provisioning, production deployment, and Phase 7 remain out of scope.
+Downloaded artifact contents were independently inspected:
+
+- `Hana-unsigned.ipa` - `7,851,388` bytes; valid ZIP with `Payload/Runner.app/`.
+- `Runner.app.zip` - `7,829,462` bytes.
+- `build-info.txt` - records `unsigned=true` and the tested commit/toolchain.
+- `ci-evidence/` - analysis, tests, simulator/device builds, XCTest, plist, credential scan, IPA entries/integrity, and toolchain evidence.
+
+The IPA is intentionally unsigned; no signing identity, certificate, provisioning profile, or fake signature was used.
+
+## Commit trail
+
+- `d762428` - `fix: align canonical manifest runtime schema`
+- `1c89a74` - `fix: unwrap iOS plugin registrar`
+- `ee05e96` - `ci: avoid credential scan false positive`
+
+Phase 7 was not started.
