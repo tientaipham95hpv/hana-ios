@@ -27,18 +27,35 @@ void main() {
         );
   });
 
+  testWidgets(
+    'cold launch never blank: visible status, media notice, chat controls',
+    (tester) async {
+      await tester.pumpWidget(testApp());
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('backend-status')), findsOneWidget);
+      expect(find.text('Backend: Chưa cấu hình'), findsOneWidget);
+      expect(
+        find.text('Character media not downloaded yet — silhouette shown.'),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('chat-input')), findsOneWidget);
+      expect(find.byKey(const Key('send-message')), findsOneWidget);
+      expect(find.byKey(const Key('ptt-button')), findsOneWidget);
+      expect(find.text('Voice input not configured'), findsOneWidget);
+      expect(find.text('Chat'), findsWidgets);
+    },
+  );
+
   testWidgets('app launches with visible no-vault fallback and chat shell', (
     tester,
   ) async {
     await tester.pumpWidget(testApp());
     await tester.pumpAndSettle();
     expect(find.text('Đang chờ thư viện vault'), findsOneWidget);
-    await tester.scrollUntilVisible(
-      find.text('Chat placeholder'),
-      300,
-      scrollable: find.byType(Scrollable).first,
-    );
-    expect(find.text('Chat placeholder'), findsOneWidget);
+    expect(find.byKey(const Key('backend-status')), findsOneWidget);
+    expect(find.byKey(const Key('chat-input')), findsOneWidget);
+    expect(find.byKey(const Key('ptt-button')), findsOneWidget);
+    expect(find.byKey(const Key('media-bootstrap-notice')), findsOneWidget);
     expect(find.byKey(const Key('mock-conversation')), findsOneWidget);
   });
 
@@ -100,12 +117,9 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('Đang chờ thư viện vault'), findsOneWidget);
-    await tester.scrollUntilVisible(
-      find.text('Chat placeholder'),
-      300,
-      scrollable: find.byType(Scrollable).first,
-    );
-    expect(find.text('Chat placeholder'), findsOneWidget);
+    expect(find.byKey(const Key('backend-status')), findsOneWidget);
+    expect(find.byKey(const Key('chat-input')), findsOneWidget);
+    expect(find.byKey(const Key('ptt-button')), findsOneWidget);
     await tester.tap(find.byTooltip('Cài đặt'));
     await tester.pumpAndSettle();
     expect(find.text('Cài đặt'), findsOneWidget);
@@ -138,6 +152,46 @@ void main() {
     expect(find.byKey(const Key('private-mode-entry')), findsNothing);
     expect(find.byKey(const Key('private-mode-unavailable')), findsOneWidget);
     expect(find.byKey(const Key('per-clip-policy-mock')), findsNothing);
+  });
+
+  testWidgets('backend misconfigured and media unavailable are explicit', (
+    tester,
+  ) async {
+    await tester.pumpWidget(testApp());
+    await tester.pumpAndSettle();
+    expect(find.text('Backend: Chưa cấu hình'), findsOneWidget);
+    expect(
+      find.text('Backend chưa cấu hình — tin nhắn sẽ báo lỗi cho tới khi cấu hình.'),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Character media not downloaded yet — silhouette shown.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('PTT unavailable state is visible', (tester) async {
+    await tester.pumpWidget(testApp());
+    await tester.pumpAndSettle();
+    expect(find.text('Voice input not configured'), findsOneWidget);
+    expect(find.byKey(const Key('ptt-button')), findsOneWidget);
+  });
+
+  testWidgets('Voice Lab accessible from settings in dev build', (tester) async {
+    await tester.pumpWidget(testApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Cài đặt'));
+    await tester.pumpAndSettle();
+    final voiceLab = find.byKey(const Key('ios-voice-lab'));
+    await tester.scrollUntilVisible(
+      voiceLab,
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(voiceLab, findsOneWidget);
+    await tester.tap(voiceLab);
+    await tester.pumpAndSettle();
+    expect(find.text('iOS Voice Lab'), findsOneWidget);
   });
 }
 

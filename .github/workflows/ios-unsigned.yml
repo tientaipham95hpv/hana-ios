@@ -2,14 +2,23 @@ name: iOS unsigned validation
 
 on:
   workflow_dispatch:
+    inputs:
+      backend_base_url:
+        description: 'Non-secret reachable Hana backend base URL (e.g. https://hana.example.com)'
+        required: false
+        type: string
+        default: ''
+      backend_enabled:
+        description: 'Enable backend integration in this IPA'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
-
 concurrency:
   group: ios-unsigned-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
   build-ios-unsigned:
     name: Test, build, and package unsigned iOS
@@ -128,7 +137,9 @@ jobs:
       - name: Build unsigned iOS device release
         run: |
           set -euo pipefail
-          flutter build ios --release --no-codesign 2>&1 \
+          flutter build ios --release --no-codesign \
+            --dart-define=HANA_BACKEND_ENABLED="${{ inputs.backend_enabled }}" \
+            --dart-define=HANA_BACKEND_BASE_URL="${{ inputs.backend_base_url }}" 2>&1 \
             | tee "$EVIDENCE_DIR/flutter-build-ios-release.txt"
           test -d build/ios/iphoneos/Runner.app
 
