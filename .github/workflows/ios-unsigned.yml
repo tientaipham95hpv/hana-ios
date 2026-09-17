@@ -152,8 +152,9 @@ jobs:
           \) -print0)
 
           while IFS= read -r -d '' candidate; do
-            if strings -a "$candidate" | grep -Eiq \
-              'DEEPGRAM_API_KEY|NINE_ROUTER_API_KEY|ELEVENLABS_API_KEY|BEGIN ([A-Z]+ )?PRIVATE KEY|service[_-]?account|Authorization:[[:space:]]*Bearer[[:space:]]+[A-Za-z0-9._-]{12,}|sk[-_][A-Za-z0-9_-]{16,}|api[_-]?key["=:[:space:]]{1,8}[A-Za-z0-9._-]{20,}'; then
+            if strings -a "$candidate" | grep -Ei \
+              'DEEPGRAM_API_KEY|NINE_ROUTER_API_KEY|ELEVENLABS_API_KEY|BEGIN ([A-Z]+ )?PRIVATE KEY|service[_-]?account|Authorization:[[:space:]]*Bearer[[:space:]]+[A-Za-z0-9._-]{12,}|(^|[^[:alnum:]_])sk-[A-Za-z0-9_-]{16,}|(^|[^[:alnum:]_])api[_-]?key["=:[:space:]]{1,8}[A-Za-z0-9._-]{20,}' \
+              >/dev/null; then
               printf '%s\n' "${candidate#${app_bundle}/}" >> "$findings"
             fi
           done < <(find "$app_bundle" -type f -print0)
