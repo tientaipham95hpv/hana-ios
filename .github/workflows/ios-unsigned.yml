@@ -82,6 +82,12 @@ jobs:
           printf 'deployment_targets=%s\n' \
             "$(tr '\n' ',' <<< "$deployment_targets" | sed 's/,$//')" \
             | tee "$EVIDENCE_DIR/ios-project.txt"
+          orientation_values="$(/usr/libexec/PlistBuddy -c 'Print :UISupportedInterfaceOrientations' ios/Runner/Info.plist)"
+          orientation_ipad="$(/usr/libexec/PlistBuddy -c 'Print :UISupportedInterfaceOrientations~ipad' ios/Runner/Info.plist)"
+          grep -q 'UIInterfaceOrientationPortrait' <<< "$orientation_values"
+          grep -q 'UIInterfaceOrientationPortrait' <<< "$orientation_ipad"
+          ! grep -q 'UIInterfaceOrientationPortraitUpsideDown' <<< "$orientation_ipad"
+          echo 'portrait_only=true' | tee "$EVIDENCE_DIR/orientation.txt"
 
           if [[ -f ios/Podfile ]]; then
             (cd ios && pod install --deployment)

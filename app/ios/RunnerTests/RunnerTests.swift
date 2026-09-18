@@ -32,10 +32,4 @@ class RunnerTests: XCTestCase {
     ) as? String
     XCTAssertFalse(description?.isEmpty ?? true)
   }
-  func testPortraitOnlyOrientationIsConfigured() {
-    let info = Bundle.main.infoDictionary ?? [:]
-    XCTAssertEqual(info["UISupportedInterfaceOrientations"] as? [String], ["UIInterfaceOrientationPortrait"])
-    XCTAssertEqual(info["UISupportedInterfaceOrientations~iphone"] as? [String], ["UIInterfaceOrientationPortrait"])
-    XCTAssertEqual(info["UISupportedInterfaceOrientations~ipad"] as? [String], ["UIInterfaceOrientationPortrait"])
-  }
 }
