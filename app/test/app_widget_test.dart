@@ -161,7 +161,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Backend: Chưa cấu hình'), findsOneWidget);
     expect(
-      find.text('Backend chưa cấu hình — tin nhắn sẽ báo lỗi cho tới khi cấu hình.'),
+      find.text(
+        'Backend chưa cấu hình — tin nhắn sẽ báo lỗi cho tới khi cấu hình.',
+      ),
       findsOneWidget,
     );
     expect(
@@ -177,7 +179,9 @@ void main() {
     expect(find.byKey(const Key('ptt-button')), findsOneWidget);
   });
 
-  testWidgets('Voice Lab accessible from settings in dev build', (tester) async {
+  testWidgets('Voice Lab accessible from settings in dev build', (
+    tester,
+  ) async {
     await tester.pumpWidget(testApp());
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Cài đặt'));
@@ -192,6 +196,73 @@ void main() {
     await tester.tap(voiceLab);
     await tester.pumpAndSettle();
     expect(find.text('iOS Voice Lab'), findsOneWidget);
+  });
+
+  testWidgets('Phase 6.6 uses full-screen Stack with overlay controls', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(testApp());
+    await tester.pumpAndSettle();
+
+    final root = find.byKey(const Key('character-stage-root'));
+    final stageViewport = find.byKey(const Key('character-stage-viewport'));
+    final chat = find.byKey(const Key('chat-overlay'));
+    final composer = find.byKey(const Key('composer-overlay'));
+    expect(root, findsOneWidget);
+    expect(stageViewport, findsOneWidget);
+    expect(chat, findsOneWidget);
+    expect(composer, findsOneWidget);
+    expect(tester.getSize(root), const Size(390, 844));
+    expect(tester.getSize(stageViewport), const Size(390, 844));
+    expect(tester.getBottomRight(composer).dy, lessThanOrEqualTo(844));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('keyboard moves composer without shrinking character stage', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    tester.view.viewInsets = const FakeViewPadding(bottom: 320);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetViewInsets);
+
+    await tester.pumpWidget(testApp());
+    await tester.pumpAndSettle();
+
+    final root = find.byKey(const Key('character-stage-root'));
+    final stageViewport = find.byKey(const Key('character-stage-viewport'));
+    final composer = find.byKey(const Key('composer-overlay'));
+    expect(tester.getSize(root), const Size(390, 844));
+    expect(tester.getSize(stageViewport), const Size(390, 844));
+    expect(tester.getBottomRight(composer).dy, lessThanOrEqualTo(524));
+    expect(find.byKey(const Key('chat-input')), findsOneWidget);
+    expect(find.byKey(const Key('send-message')), findsOneWidget);
+    expect(find.byKey(const Key('ptt-button')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('small portrait viewport keeps safe controls visible', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 568);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(testApp());
+    await tester.pumpAndSettle();
+
+    expect(find.byTooltip('Cài đặt'), findsOneWidget);
+    expect(find.byKey(const Key('composer-overlay')), findsOneWidget);
+    expect(find.byKey(const Key('ptt-status')), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }
 

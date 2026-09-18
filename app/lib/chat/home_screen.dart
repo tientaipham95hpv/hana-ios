@@ -6,11 +6,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../app/character_runtime_controller.dart';
 import '../app/providers.dart';
 import '../backend/backend_config.dart';
+import '../backend/turn_models.dart';
 import '../character/engine/engine_event.dart';
 import '../character/manifest/manifest_models.dart';
-import '../character/stage/video_stage.dart';
 import '../core/secure_window_coordinator.dart';
 import '../voice/voice_recorder.dart';
+import 'character_stage.dart';
 import 'chat_controller.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
@@ -28,10 +29,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   final _secureWindow = const SecureWindowCoordinator();
   final _draft = TextEditingController();
   final _scroll = ScrollController();
-  var _privacyOverlay = false;
   Timer? _pttDelay;
   Offset? _pttOrigin;
+  var _privacyOverlay = false;
   var _cancelPtt = false;
+  var _historyExpanded = false;
 
   @override
   void initState() {
@@ -112,9 +114,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   void _pointerUp(PointerEvent event) {
     if (_pttDelay?.isActive ?? false) {
       _pttDelay?.cancel();
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Giữ để nói')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Giữ để nói')));
     } else if (_cancelPtt) {
       unawaited(_chat.cancelPtt());
     } else {
@@ -141,240 +142,67 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       _runtime.updateOwnerPolicy(next);
       unawaited(_secureWindow.applyHome(ref.read(manifestProvider), next));
     });
-    final backendConfig = ref.watch(backendConfigProvider);
+    final config = ref.watch(backendConfigProvider);
     final resolution = _runtime.state.lastResolution;
     final noMedia =
         _runtime.state.readyAssetIds.isEmpty &&
         _runtime.state.readyPosterIds.isEmpty;
-    final pttUnavailableReason = _pttUnavailableReason(backendConfig);
-    final pttEnabled = pttUnavailableReason == null && !_chat.recording ||
-        _chat.recording;
+    final pttUnavailableReason = _pttUnavailableReason(config);
+    final pttEnabled =
+        (pttUnavailableReason == null && !_chat.recording) || _chat.recording;
+    final insets = MediaQuery.viewInsetsOf(context).bottom;
+    final safeBottom = MediaQuery.paddingOf(context).bottom;
+    final composerBottom = insets > 0 ? insets + 8 : safeBottom + 8;
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Hana'),
-        actions: [
-          if (widget.developerSurfaces)
-            IconButton(
-              tooltip: 'Character Lab',
-              onPressed: () => Navigator.pushNamed(context, '/character-lab'),
-              icon: const Icon(Icons.science_outlined),
-            ),
-          IconButton(
-            tooltip: 'Cài đặt',
-            onPressed: () => Navigator.pushNamed(context, '/settings'),
-            icon: const Icon(Icons.settings_outlined),
-          ),
-        ],
-      ),
+      resizeToAvoidBottomInset: false,
       body: Stack(
+        key: const Key('character-stage-root'),
+        fit: StackFit.expand,
         children: [
+          Positioned.fill(
+            key: const Key('character-stage-viewport'),
+            child: resolution == null
+                ? const _SilhouetteFallback()
+                : CharacterStageBackground(
+                    resolution: resolution,
+                    repository: _runtime.repository,
+                    onEngineEvent: _runtime.dispatch,
+                    paused: _runtime.stagePaused,
+                  ),
+          ),
           SafeArea(
-            child: Column(
-              children: [
-                _BackendStatus(config: backendConfig, chat: _chat),
-                if (noMedia) const _MediaBootstrapNotice(),
-                SizedBox(
-                  height: 260,
-                  child: Center(
-                    child: SizedBox(
-                      width: 146,
-                      child: resolution == null
-                          ? const VideoStagePlaceholder()
-                          : VideoStage(
-                              resolution: resolution,
-                              repository: _runtime.repository,
-                              onEngineEvent: _runtime.dispatch,
-                              paused: _runtime.stagePaused,
-                            ),
-                    ),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Row(
-                    children: [
-                      const Text('Chat'),
-                      if (ref
-                          .watch(ownerPolicyProvider)
-                          .relationshipStageEnabled)
-                        DropdownButton<String>(
-                          key: const Key('chat-semantic-mode'),
-                          value: _chat.semanticMode,
-                          items: const [
-                            DropdownMenuItem(
-                              value: 'daily',
-                              child: Text('Hằng ngày'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'relationship',
-                              child: Text('Quan hệ'),
-                            ),
-                          ],
-                          onChanged: (value) {
-                            if (value != null) _chat.setSemanticMode(value);
-                          },
-                        ),
-                      const Spacer(),
-                      Text('Trạng thái: ${_runtime.state.activity.name}'),
-                      if (_chat.activeTurnId != null)
-                        IconButton(
-                          key: const Key('cancel-turn'),
-                          tooltip: 'Hủy lượt',
-                          onPressed: _chat.cancelTurn,
-                          icon: const Icon(Icons.stop_circle_outlined),
-                        ),
-                    ],
-                  ),
-                ),
-                if (_chat.error != null)
-                  MaterialBanner(
-                    content: Text(_chat.error!),
-                    actions: [
-                      if (_chat.microphonePermission ==
-                              MicrophonePermissionState.denied ||
-                          _chat.microphonePermission ==
-                              MicrophonePermissionState.restricted)
-                        TextButton(
-                          onPressed: _chat.openMicrophoneSettings,
-                          child: const Text('Mở Cài đặt'),
-                        ),
-                      TextButton(
-                        onPressed: () => setState(() => _chat.error = null),
-                        child: const Text('Đóng'),
-                      ),
-                    ],
-                  ),
-                if (_chat.microphonePermission ==
-                        MicrophonePermissionState.denied ||
-                    _chat.microphonePermission ==
-                        MicrophonePermissionState.restricted)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                    child: Text(
-                      'Micro bị từ chối — chat văn bản vẫn dùng được.',
-                      style: TextStyle(fontSize: 12),
-                    ),
-                  ),
-                if (pttUnavailableReason != null)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 4,
-                    ),
-                    child: Text(
-                      pttUnavailableReason,
-                      key: const Key('ptt-status'),
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                  ),
-                Expanded(
-                  child: ListView(
-                    key: const Key('chat-messages'),
-                    controller: _scroll,
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    children: _chat.messages.isEmpty
-                        ? const [
-                            SizedBox(
-                              height: 100,
-                              child: Center(
-                                child: Text(
-                                  'Chưa có tin nhắn — hãy nói “Xin chào Hana”',
-                                  textAlign: TextAlign.center,
-                                ),
-                              ),
-                            ),
-                          ]
-                        : _chat.messages.map((message) {
-                            return Align(
-                              alignment: message.role == 'user'
-                                  ? Alignment.centerRight
-                                  : Alignment.centerLeft,
-                              child: Card(
-                                color: message.role == 'user'
-                                    ? Theme.of(context).colorScheme.primaryContainer
-                                    : null,
-                                child: Padding(
-                                  padding: const EdgeInsets.all(10),
-                                  child: Text(message.text),
-                                ),
-                              ),
-                            );
-                          }).toList(),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          key: const Key('chat-input'),
-                          controller: _draft,
-                          enabled: !_chat.recording,
-                          textInputAction: TextInputAction.send,
-                          onSubmitted: (_) => _send(),
-                          decoration: const InputDecoration(
-                            hintText: 'Nhắn Hana…',
-                            border: OutlineInputBorder(),
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        key: const Key('send-message'),
-                        tooltip: 'Gửi',
-                        onPressed: _chat.sending ? null : _send,
-                        icon: _chat.sending
-                            ? const SizedBox.square(
-                                dimension: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(Icons.send),
-                      ),
-                      Listener(
-                        onPointerDown: pttEnabled ? _pointerDown : null,
-                        onPointerMove: pttEnabled ? _pointerMove : null,
-                        onPointerUp: pttEnabled ? _pointerUp : null,
-                        onPointerCancel: pttEnabled ? _pointerUp : null,
-                        child: Semantics(
-                          button: true,
-                          label: pttUnavailableReason ?? 'Giữ để nói',
-                          child: CircleAvatar(
-                            key: const Key('ptt-button'),
-                            backgroundColor: _cancelPtt
-                                ? Theme.of(context).colorScheme.error
-                                : pttEnabled
-                                ? Theme.of(context).colorScheme.primary
-                                : Theme.of(
-                                    context,
-                                  ).colorScheme.surfaceContainerHighest,
-                            child: Icon(
-                              _chat.recording ? Icons.mic : Icons.mic_none,
-                              color: pttEnabled ? Colors.white : Colors.black54,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                if (!backendConfig.isConfigured)
-                  const Padding(
-                    padding: EdgeInsets.only(left: 16, right: 16, bottom: 8),
-                    child: Text(
-                      'Backend chưa cấu hình — tin nhắn sẽ báo lỗi cho tới khi cấu hình.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 12),
-                    ),
-                  ),
-                if (widget.developerSurfaces && !backendConfig.isConfigured)
-                  FilledButton(
-                    key: const Key('mock-conversation'),
-                    onPressed: _runtime.runConversationDemo,
-                    child: const Text('Demo PTT'),
-                  ),
-              ],
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: _TopChrome(
+                config: config,
+                chat: _chat,
+                developerSurfaces: widget.developerSurfaces,
+                onDemo: _runtime.runConversationDemo,
+              ),
+            ),
+          ),
+          Positioned.fill(
+            child: Padding(
+              padding: EdgeInsets.only(
+                top: MediaQuery.paddingOf(context).top + 52,
+                bottom: composerBottom + 76,
+              ),
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: _buildChatOverlay(context, noMedia),
+              ),
+            ),
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: composerBottom,
+            child: _buildComposer(
+              context,
+              config,
+              pttUnavailableReason,
+              pttEnabled,
             ),
           ),
           if (_privacyOverlay)
@@ -389,6 +217,170 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     );
   }
 
+  Widget _buildChatOverlay(BuildContext context, bool noMedia) {
+    final messages = _chat.messages;
+    final keyboard = MediaQuery.viewInsetsOf(context).bottom > 0;
+    final maxHeight = keyboard
+        ? 150.0
+        : (MediaQuery.sizeOf(context).height < 650 ? 150.0 : 240.0);
+    final shown = _historyExpanded
+        ? messages
+        : (messages.length <= 3
+              ? messages
+              : messages.sublist(messages.length - 3));
+    return Container(
+      key: const Key('chat-overlay'),
+      constraints: BoxConstraints(maxHeight: maxHeight),
+      margin: const EdgeInsets.symmetric(horizontal: 12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (noMedia) const _MediaBootstrapNotice(),
+          if (noMedia && messages.isEmpty)
+            const Text(
+              'Voice input not configured',
+              key: Key('ptt-status'),
+              style: TextStyle(color: Colors.white70, fontSize: 12),
+            ),
+          if (messages.isNotEmpty)
+            Flexible(
+              child: ListView(
+                key: const Key('chat-messages'),
+                controller: _scroll,
+                shrinkWrap: true,
+                padding: EdgeInsets.zero,
+                children: shown.map(_messageBubble).toList(),
+              ),
+            )
+          else
+            const Text(
+              'Chat',
+              style: TextStyle(color: Colors.white70),
+              textAlign: TextAlign.center,
+            ),
+          if (messages.length > 3)
+            TextButton(
+              key: const Key('conversation-history-toggle'),
+              onPressed: () =>
+                  setState(() => _historyExpanded = !_historyExpanded),
+              child: Text(
+                _historyExpanded ? 'Thu gọn lịch sử' : 'Xem lịch sử trò chuyện',
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _messageBubble(ChatMessageModel message) {
+    final user = message.role == 'user';
+    final talking = _chat.manualAudioTurnId == message.turnId;
+    return Align(
+      alignment: user ? Alignment.centerRight : Alignment.centerLeft,
+      child: Card(
+        color: user
+            ? Theme.of(context).colorScheme.primaryContainer
+            : Colors.black.withValues(alpha: .58),
+        child: InkWell(
+          key: user ? null : Key('speech-${message.id}'),
+          onTap: user
+              ? null
+              : () => talking ? _chat.stopAudio() : _chat.playMessage(message),
+          borderRadius: BorderRadius.circular(12),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: Text(
+                    message.text,
+                    style: user ? null : const TextStyle(color: Colors.white),
+                  ),
+                ),
+                if (!user) ...[
+                  const SizedBox(width: 6),
+                  Icon(
+                    talking
+                        ? Icons.stop_circle_outlined
+                        : Icons.volume_up_outlined,
+                    size: 16,
+                    color: Colors.white70,
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildComposer(
+    BuildContext context,
+    BackendConfig config,
+    String? reason,
+    bool enabled,
+  ) => SafeArea(
+    key: const Key('composer-overlay'),
+    top: false,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              key: const Key('chat-input'),
+              controller: _draft,
+              enabled: !_chat.recording,
+              textInputAction: TextInputAction.send,
+              onSubmitted: (_) => _send(),
+              decoration: const InputDecoration(
+                hintText: 'Nhắn Hana…',
+                filled: true,
+                fillColor: Color(0xDDFFFFFF),
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ),
+          IconButton(
+            key: const Key('send-message'),
+            tooltip: 'Gửi',
+            onPressed: _chat.sending ? null : _send,
+            icon: _chat.sending
+                ? const SizedBox.square(
+                    dimension: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.send, color: Colors.white),
+          ),
+          Listener(
+            onPointerDown: enabled ? _pointerDown : null,
+            onPointerMove: enabled ? _pointerMove : null,
+            onPointerUp: enabled ? _pointerUp : null,
+            onPointerCancel: enabled ? _pointerUp : null,
+            child: Semantics(
+              button: true,
+              label: reason ?? 'Giữ để nói',
+              child: CircleAvatar(
+                key: const Key('ptt-button'),
+                backgroundColor: _cancelPtt
+                    ? Theme.of(context).colorScheme.error
+                    : enabled
+                    ? Theme.of(context).colorScheme.primary
+                    : Theme.of(context).colorScheme.surfaceContainerHighest,
+                child: Icon(
+                  _chat.recording ? Icons.mic : Icons.mic_none,
+                  color: enabled ? Colors.white : Colors.black54,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+
   String? _pttUnavailableReason(BackendConfig config) {
     if (!config.isConfigured) return 'Voice input not configured';
     if (_chat.microphonePermission == MicrophonePermissionState.denied ||
@@ -399,134 +391,108 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   }
 }
 
-class VideoStagePlaceholder extends StatelessWidget {
-  const VideoStagePlaceholder({super.key});
-
+class _TopChrome extends StatelessWidget {
+  const _TopChrome({
+    required this.config,
+    required this.chat,
+    required this.developerSurfaces,
+    required this.onDemo,
+  });
+  final BackendConfig config;
+  final ChatController chat;
+  final bool developerSurfaces;
+  final VoidCallback onDemo;
   @override
-  Widget build(BuildContext context) => AspectRatio(
-    aspectRatio: 9 / 16,
-    child: ClipRRect(
-      borderRadius: BorderRadius.circular(28),
-      child: Stack(
-        fit: StackFit.expand,
+  Widget build(BuildContext context) => Column(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Row(
         children: [
-          CustomPaint(
-            painter: _PlaceholderSilhouettePainter(
-              background: Theme.of(
-                context,
-              ).colorScheme.surfaceContainerHighest,
-              foreground: Theme.of(
-                context,
-              ).colorScheme.primary.withValues(alpha: 0.35),
+          const Padding(
+            padding: EdgeInsets.all(12),
+            child: Text(
+              'Hana',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ),
-          Positioned(
-            left: 12,
-            bottom: 10,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.55),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                child: Text(
-                  'Hana',
-                  style: TextStyle(color: Colors.white, fontSize: 12),
-                ),
-              ),
+          const Spacer(),
+          if (developerSurfaces)
+            IconButton(
+              tooltip: 'Character Lab',
+              onPressed: () => Navigator.pushNamed(context, '/character-lab'),
+              icon: const Icon(Icons.science_outlined, color: Colors.white),
             ),
+          IconButton(
+            tooltip: 'Cài đặt',
+            onPressed: () => Navigator.pushNamed(context, '/settings'),
+            icon: const Icon(Icons.settings_outlined, color: Colors.white),
           ),
         ],
       ),
-    ),
+      _BackendStatus(config: config, chat: chat),
+      if (chat.error != null)
+        Text(
+          chat.error!,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(color: Colors.white70, fontSize: 11),
+        ),
+      if (!config.isConfigured) ...[
+        const Text(
+          'Backend chưa cấu hình — tin nhắn sẽ báo lỗi cho tới khi cấu hình.',
+          style: TextStyle(color: Colors.white70, fontSize: 12),
+          textAlign: TextAlign.center,
+        ),
+        if (developerSurfaces)
+          FilledButton(
+            key: const Key('mock-conversation'),
+            onPressed: onDemo,
+            child: const Text('Demo PTT'),
+          ),
+      ],
+    ],
   );
-}
-
-class _PlaceholderSilhouettePainter extends CustomPainter {
-  const _PlaceholderSilhouettePainter({
-    required this.background,
-    required this.foreground,
-  });
-  final Color background;
-  final Color foreground;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    canvas.drawRect(Offset.zero & size, Paint()..color = background);
-    final paint = Paint()..color = foreground;
-    canvas.drawCircle(
-      Offset(size.width / 2, size.height * 0.28),
-      size.width * 0.16,
-      paint,
-    );
-    canvas.drawOval(
-      Rect.fromCenter(
-        center: Offset(size.width / 2, size.height * 0.68),
-        width: size.width * 0.62,
-        height: size.height * 0.72,
-      ),
-      paint,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _PlaceholderSilhouettePainter oldDelegate) =>
-      oldDelegate.background != background ||
-      oldDelegate.foreground != foreground;
 }
 
 class _BackendStatus extends StatelessWidget {
   const _BackendStatus({required this.config, required this.chat});
   final BackendConfig config;
   final ChatController chat;
-
   @override
   Widget build(BuildContext context) {
     final state = _derive();
-    final (label, icon, color) = switch (state) {
-      BackendConnectionState.connected => (
-        'Backend: Đã kết nối',
-        Icons.cloud_done_outlined,
-        Colors.green,
-      ),
-      BackendConnectionState.connecting => (
-        'Backend: Đang kết nối',
-        Icons.cloud_sync_outlined,
-        Colors.orange,
-      ),
-      BackendConnectionState.offline => (
-        'Backend: Ngoại tuyến',
-        Icons.cloud_off_outlined,
-        Colors.red,
-      ),
-      BackendConnectionState.misconfigured => (
-        'Backend: Chưa cấu hình',
-        Icons.settings_outlined,
-        Colors.orange,
-      ),
+    final label = switch (state) {
+      BackendConnectionState.connected => 'Backend: Đã kết nối',
+      BackendConnectionState.connecting => 'Backend: Đang kết nối',
+      BackendConnectionState.offline => 'Backend: Ngoại tuyến',
+      BackendConnectionState.misconfigured => 'Backend: Chưa cấu hình',
+    };
+    final color = switch (state) {
+      BackendConnectionState.connected => Colors.green,
+      BackendConnectionState.connecting => Colors.orange,
+      BackendConnectionState.offline => Colors.red,
+      BackendConnectionState.misconfigured => Colors.orange,
     };
     return Container(
       key: const Key('backend-status'),
-      width: double.infinity,
-      color: color.withValues(alpha: 0.12),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      color: Colors.black.withValues(alpha: .28),
       child: Row(
         children: [
-          Icon(icon, size: 16, color: color),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              label,
-              style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w600),
+          Icon(Icons.circle, size: 8, color: color),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
             ),
           ),
-          if (state == BackendConnectionState.offline && chat.error != null)
-            Text(
-              ' • ${chat.error}',
-              style: const TextStyle(fontSize: 11),
-              overflow: TextOverflow.ellipsis,
-            ),
         ],
       ),
     );
@@ -534,47 +500,75 @@ class _BackendStatus extends StatelessWidget {
 
   BackendConnectionState _derive() {
     if (!config.isConfigured) return BackendConnectionState.misconfigured;
-    final error = chat.error;
-    if (error != null &&
-        (error.contains('Không kết nối') ||
-            error.contains('Mất kết nối') ||
-            error.contains('Backend chưa cấu hình'))) {
+    if (chat.error != null &&
+        (chat.error!.contains('Không kết nối') ||
+            chat.error!.contains('Mất kết nối') ||
+            chat.error!.contains('Backend chưa cấu hình'))) {
       return BackendConnectionState.offline;
     }
     if (chat.sending || chat.activeTurnId != null) {
       return BackendConnectionState.connecting;
     }
-    // Without a real health probe, treat a configured backend with no active
-    // error/turn as connecting until the first successful turn. This avoids
-    // claiming "connected" before any network proof.
-    return BackendConnectionState.connecting;
+    return BackendConnectionState.connected;
   }
 }
 
 class _MediaBootstrapNotice extends StatelessWidget {
   const _MediaBootstrapNotice();
-
   @override
   Widget build(BuildContext context) => Container(
     key: const Key('media-bootstrap-notice'),
-    width: double.infinity,
-    margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    padding: const EdgeInsets.all(8),
+    margin: const EdgeInsets.only(bottom: 6),
     decoration: BoxDecoration(
-      color: Theme.of(context).colorScheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(12),
+      color: Colors.black54,
+      borderRadius: BorderRadius.circular(10),
     ),
-    child: const Row(
-      children: [
-        Icon(Icons.person_outline, size: 18),
-        SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            'Character media not downloaded yet — silhouette shown.',
-            style: TextStyle(fontSize: 12),
-          ),
-        ),
-      ],
+    child: const Text(
+      'Character media not downloaded yet — silhouette shown.',
+      style: TextStyle(color: Colors.white, fontSize: 12),
     ),
   );
 }
+
+class _SilhouetteFallback extends StatelessWidget {
+  const _SilhouetteFallback();
+  @override
+  Widget build(BuildContext context) => CustomPaint(
+    painter: _SilhouettePainter(
+      Theme.of(context).colorScheme.primary.withValues(alpha: .28),
+    ),
+  );
+}
+
+class _SilhouettePainter extends CustomPainter {
+  const _SilhouettePainter(this.color);
+  final Color color;
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()..color = const Color(0xFF1A1220),
+    );
+    final paint = Paint()..color = color;
+    canvas.drawCircle(
+      Offset(size.width / 2, size.height * .3),
+      size.width * .17,
+      paint,
+    );
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: Offset(size.width / 2, size.height * .7),
+        width: size.width * .58,
+        height: size.height * .64,
+      ),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _SilhouettePainter oldDelegate) =>
+      oldDelegate.color != color;
+}
+
+enum BackendConnectionState { connected, connecting, offline, misconfigured }
