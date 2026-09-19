@@ -70,7 +70,7 @@ class CharacterManifestLoader {
 
   ManifestLoadResult load(
     String source, {
-    int expectedAssetCount = 43,
+    int? expectedAssetCount = 43,
     Set<ManifestKind> allowedKinds = const {
       ManifestKind.bundle,
       ManifestKind.vault,
@@ -95,7 +95,7 @@ class CharacterManifestLoader {
 
   CharacterManifest parse(
     Map<String, dynamic> json, {
-    int expectedAssetCount = 43,
+    int? expectedAssetCount = 43,
     Set<ManifestKind> allowedKinds = const {
       ManifestKind.bundle,
       ManifestKind.vault,
@@ -123,9 +123,13 @@ class CharacterManifestLoader {
       );
     }
     final rawAssets = json['assets'];
-    if (rawAssets is! List || rawAssets.length != expectedAssetCount) {
+    if (rawAssets is! List ||
+        (expectedAssetCount != null &&
+            rawAssets.length != expectedAssetCount)) {
       throw FormatException(
-        'manifest must contain exactly $expectedAssetCount assets',
+        expectedAssetCount == null
+            ? 'manifest assets must be an array'
+            : 'manifest must contain exactly $expectedAssetCount assets',
       );
     }
     final assets = <CharacterAsset>[];

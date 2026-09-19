@@ -39,6 +39,8 @@ dependencies:
   sqlite3: 2.9.4
   sqlite3_flutter_libs: 0.5.40
   path: ^1.9.1
+  path_provider: ^2.1.5
+  crypto: ^3.0.6
   # Pinned before the native-assets JNI migration; the app has no native DB build step.
   path_provider_android: 2.2.18
   dio: ^5.11.1

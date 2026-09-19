@@ -10,6 +10,8 @@ import '../manifest/manifest_models.dart';
 import '../policy/owner_policy.dart';
 import '../resolver/asset_resolver.dart';
 import '../resolver/random_source.dart';
+import '../stage/video_stage.dart';
+import '../vault/vault_models.dart';
 import '../../private_mode/private_session.dart';
 
 class CharacterLabScreen extends ConsumerStatefulWidget {
@@ -178,6 +180,7 @@ class _CharacterLabScreenState extends ConsumerState<CharacterLabScreen> {
   Widget build(BuildContext context) {
     ref.listen(ownerPolicyProvider, (_, next) => _refresh(next));
     final manifest = ref.watch(manifestProvider);
+    final vault = ref.watch(characterVaultProvider);
     final result = _resolution!;
     final asset = result.playRequest?.asset ?? result.posterAsset;
     final override = asset == null
@@ -239,15 +242,19 @@ class _CharacterLabScreenState extends ConsumerState<CharacterLabScreen> {
               color: const Color(0xFFE8DCE2),
               borderRadius: BorderRadius.circular(24),
             ),
-            child: Center(
-              child: Icon(
-                result.kind == VisualKind.silhouette
-                    ? Icons.person_outline
-                    : Icons.play_circle_outline,
-                size: 96,
-                color: const Color(0xFF9A5B79),
-              ),
-            ),
+            child: result.kind == VisualKind.silhouette
+                ? const Center(
+                    child: Icon(
+                      Icons.person_outline,
+                      size: 96,
+                      color: Color(0xFF9A5B79),
+                    ),
+                  )
+                : VideoStage(
+                    resolution: result,
+                    repository: ref.read(assetRepositoryProvider),
+                    onEngineEvent: (_) {},
+                  ),
           ),
           const SizedBox(height: 12),
           Card(
@@ -264,6 +271,9 @@ class _CharacterLabScreenState extends ConsumerState<CharacterLabScreen> {
                         ),
                         Text('Sensitivity: ${asset.contentSensitivity.name}'),
                         Text(
+                          'States: ${asset.states.keys.map((e) => e.name).join(', ')}',
+                        ),
+                        Text(
                           'Allowed: ${asset.allowedModes.map((e) => e.name).join(', ')}',
                         ),
                         Text(
@@ -275,8 +285,23 @@ class _CharacterLabScreenState extends ConsumerState<CharacterLabScreen> {
                         Text('Playback: ${asset.kind.name}'),
                         Text('Review: ${asset.reviewFlag}'),
                         Text('Excluded default: ${asset.excludedByDefault}'),
+                        Text(
+                          'Download: ${vault.statusFor(asset.assetId).name}',
+                        ),
+                        Text(
+                          'Integrity: ${vault.statusFor(asset.assetId) == VaultAssetStatus.ready ? 'verified' : 'not ready'}',
+                        ),
+                        Text(
+                          'Cache: ${vault.isReady(asset.assetId) ? 'local' : 'absent'}',
+                        ),
                         Text('Candidate pool: ${result.candidatePoolCount}'),
                         Text('Fallback: ${result.fallbackTrace.join(' → ')}'),
+                        OutlinedButton.icon(
+                          key: const Key('character-lab-play-test'),
+                          onPressed: _refresh,
+                          icon: const Icon(Icons.play_arrow),
+                          label: const Text('Play / test'),
+                        ),
                         SwitchListTile(
                           contentPadding: EdgeInsets.zero,
                           title: const Text('Per-clip enabled'),

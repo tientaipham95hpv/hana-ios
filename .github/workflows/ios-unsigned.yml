@@ -13,6 +13,16 @@ on:
         required: false
         type: boolean
         default: false
+      media_base_url:
+        description: 'Non-secret character media base URL'
+        required: false
+        type: string
+        default: ''
+      media_manifest_url:
+        description: 'Optional non-secret character manifest URL override'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -145,7 +155,9 @@ jobs:
           set -euo pipefail
           flutter build ios --release --no-codesign \
             --dart-define=HANA_BACKEND_ENABLED="${{ inputs.backend_enabled }}" \
-            --dart-define=HANA_BACKEND_BASE_URL="${{ inputs.backend_base_url }}" 2>&1 \
+            --dart-define=HANA_BACKEND_BASE_URL="${{ inputs.backend_base_url }}" \
+            --dart-define=HANA_MEDIA_BASE_URL="${{ inputs.media_base_url }}" \
+            --dart-define=HANA_MEDIA_MANIFEST_URL="${{ inputs.media_manifest_url }}" 2>&1 \
             | tee "$EVIDENCE_DIR/flutter-build-ios-release.txt"
           test -d build/ios/iphoneos/Runner.app
 
@@ -202,6 +214,15 @@ jobs:
             echo 'IPA contains an entry outside Payload/Runner.app.'
             exit 1
           fi
+          if grep -Eiq '\.mp4$|assets_processed|assets_source' \
+            "$EVIDENCE_DIR/ipa-entries.txt"; then
+            echo 'IPA audit failed: character media or a source-media path was bundled.'
+            grep -Ei '\.mp4$|assets_processed|assets_source' \
+              "$EVIDENCE_DIR/ipa-entries.txt"
+            exit 1
+          fi
+          echo 'PASS: 0 MP4 files and 0 source/processed media paths in IPA.' \
+            | tee "$EVIDENCE_DIR/ipa-media-audit.txt"
 
           ditto -c -k --sequesterRsrc --keepParent \
             build/ios/iphoneos/Runner.app Runner.app.zip
@@ -245,6 +266,7 @@ jobs:
             echo '- Unsigned device release build: PASS'
             echo '- Runner.app credential scan: PASS'
             echo '- IPA structure: PASS (`Payload/Runner.app/`)'
+            echo '- IPA character media audit: PASS (0 MP4 assets bundled)'
             echo '- Voice runtime/audio quality: `VOICE_RUNTIME_VALIDATION_PENDING`'
             echo '- Artifact: `hana-ios-unsigned`'
           } >> "$GITHUB_STEP_SUMMARY"

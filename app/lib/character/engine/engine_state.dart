@@ -64,6 +64,7 @@ class CharacterEngineState {
   final bool overlayCompletionPending;
 
   CharacterEngineState copyWith({
+    CharacterManifest? manifest,
     OwnerPolicy? ownerPolicy,
     CoreState? activity,
     StageContext? stageContext,
@@ -95,7 +96,7 @@ class CharacterEngineState {
     bool clearOverlayEnteredAt = false,
     bool? overlayCompletionPending,
   }) => CharacterEngineState(
-    manifest: manifest,
+    manifest: manifest ?? this.manifest,
     ownerPolicy: ownerPolicy ?? this.ownerPolicy,
     privateSessionActive: privateSessionActive,
     activity: activity ?? this.activity,

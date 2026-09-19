@@ -41,7 +41,10 @@ class CharacterRuntimeController extends ChangeNotifier {
       dispatch: dispatch,
       repository: repository,
       ports: EngineRuntimePorts(
-        onPlay: (_) => notifyListeners(),
+        onPlay: (resolution) {
+          ports.onPlay?.call(resolution);
+          notifyListeners();
+        },
         onPreload: ports.onPreload,
         onStagePaused: (value) {
           stagePaused = value;
@@ -130,6 +133,17 @@ class CharacterRuntimeController extends ChangeNotifier {
   }
 
   Future<void> refreshVaultAvailability() async {
+    if (repository is CharacterAssetAvailability) {
+      final availability = repository as CharacterAssetAvailability;
+      final readyVideos = await availability.readyVideoIds(state.manifest);
+      final readyPosters = await availability.readyPosterIds(state.manifest);
+      _manager.normal.state = state.copyWith(
+        readyAssetIds: Set.unmodifiable(readyVideos),
+        readyPosterIds: Set.unmodifiable(readyPosters),
+      );
+      dispatch(const AssetsAvailabilityChanged());
+      return;
+    }
     final readyVideos = <String>{};
     final readyPosters = <String>{};
     for (final asset in state.manifest.assets) {
@@ -144,6 +158,12 @@ class CharacterRuntimeController extends ChangeNotifier {
       readyAssetIds: Set.unmodifiable(readyVideos),
       readyPosterIds: Set.unmodifiable(readyPosters),
     );
+    dispatch(const AssetsAvailabilityChanged());
+  }
+
+  void updateManifest(CharacterManifest manifest) {
+    if (_manager.isPrivateOpen) return;
+    _manager.normal.state = state.copyWith(manifest: manifest);
     dispatch(const AssetsAvailabilityChanged());
   }
 

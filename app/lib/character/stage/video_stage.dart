@@ -62,6 +62,7 @@ class _VideoStageState extends State<VideoStage> {
   CharacterAsset? _frontAsset;
   CharacterAsset? _backAsset;
   final Map<VideoControllerPort, void Function()> _listeners = {};
+  final Map<VideoControllerPort, String> _controllerAssets = {};
   final Set<VideoControllerPort> _inflight = {};
   final Set<VideoControllerPort> _disposed = {};
   File? _poster;
@@ -155,12 +156,18 @@ class _VideoStageState extends State<VideoStage> {
     final factory = widget.controllerFactory ?? VideoPlayerControllerPort.file;
     if (generation != _generation || !mounted) return;
     final incoming = factory(media.video);
+    if (widget.repository is CharacterAssetLifecycle) {
+      final lifecycle = widget.repository as CharacterAssetLifecycle;
+      lifecycle.protect(asset.assetId);
+      _controllerAssets[incoming] = asset.assetId;
+    }
     _inflight.add(incoming);
     assert(_liveControllerCount <= VideoStage.maxControllerCount);
     try {
       await MutedVideoSession(incoming)
           .initializeAndPlay(looping: resolution.playRequest!.loop)
           .timeout(widget.initializationTimeout);
+      if (widget.paused) await incoming.pause();
       _inflight.remove(incoming);
       if (generation != _generation || !mounted) {
         await _disposeController(incoming);
@@ -230,6 +237,11 @@ class _VideoStageState extends State<VideoStage> {
     _inflight.remove(controller);
     final listener = _listeners.remove(controller);
     listener?.call();
+    final assetId = _controllerAssets.remove(controller);
+    if (assetId != null && widget.repository is CharacterAssetLifecycle) {
+      final lifecycle = widget.repository as CharacterAssetLifecycle;
+      lifecycle.release(assetId);
+    }
     await controller.dispose();
   }
 

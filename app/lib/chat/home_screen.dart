@@ -9,6 +9,7 @@ import '../backend/backend_config.dart';
 import '../backend/turn_models.dart';
 import '../character/engine/engine_event.dart';
 import '../character/manifest/manifest_models.dart';
+import '../character/vault/character_vault.dart';
 import '../core/secure_window_coordinator.dart';
 import '../voice/voice_recorder.dart';
 import 'character_stage.dart';
@@ -26,6 +27,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     with WidgetsBindingObserver {
   late final CharacterRuntimeController _runtime;
   late final ChatController _chat;
+  late final CharacterVault _vault;
   final _secureWindow = const SecureWindowCoordinator();
   final _draft = TextEditingController();
   final _scroll = ScrollController();
@@ -41,13 +43,25 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     WidgetsBinding.instance.addObserver(this);
     _runtime = ref.read(characterRuntimeProvider)..addListener(_refresh);
     _chat = ref.read(chatControllerProvider)..addListener(_refresh);
+    _vault = ref.read(characterVaultProvider)..addListener(_mediaRefresh);
     unawaited(
       _secureWindow.applyHome(
         ref.read(manifestProvider),
         ref.read(ownerPolicyProvider),
       ),
     );
+    unawaited(_bootstrapMedia());
+  }
+
+  Future<void> _bootstrapMedia() async {
+    await _vault.bootstrap();
+    _runtime.updateManifest(_vault.manifest);
+    await _runtime.refreshVaultAvailability();
+  }
+
+  void _mediaRefresh() {
     unawaited(_runtime.refreshVaultAvailability());
+    _refresh();
   }
 
   void _refresh() {
@@ -131,6 +145,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     WidgetsBinding.instance.removeObserver(this);
     _runtime.removeListener(_refresh);
     _chat.removeListener(_refresh);
+    _vault.removeListener(_mediaRefresh);
     _draft.dispose();
     _scroll.dispose();
     super.dispose();
@@ -235,7 +250,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (noMedia) const _MediaBootstrapNotice(),
+          if (noMedia) _MediaBootstrapNotice(status: _vault.snapshot.label),
           if (noMedia && messages.isEmpty)
             const Text(
               'Voice input not configured',
@@ -514,7 +529,8 @@ class _BackendStatus extends StatelessWidget {
 }
 
 class _MediaBootstrapNotice extends StatelessWidget {
-  const _MediaBootstrapNotice();
+  const _MediaBootstrapNotice({required this.status});
+  final String status;
   @override
   Widget build(BuildContext context) => Container(
     key: const Key('media-bootstrap-notice'),
@@ -524,9 +540,18 @@ class _MediaBootstrapNotice extends StatelessWidget {
       color: Colors.black54,
       borderRadius: BorderRadius.circular(10),
     ),
-    child: const Text(
-      'Character media not downloaded yet — silhouette shown.',
-      style: TextStyle(color: Colors.white, fontSize: 12),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text(
+          'Character media not downloaded yet — silhouette shown.',
+          style: TextStyle(color: Colors.white, fontSize: 12),
+        ),
+        Text(
+          status,
+          style: const TextStyle(color: Colors.white70, fontSize: 11),
+        ),
+      ],
     ),
   );
 }

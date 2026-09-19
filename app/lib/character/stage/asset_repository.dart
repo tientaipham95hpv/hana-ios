@@ -19,6 +19,18 @@ abstract interface class CharacterAssetRepository {
   Future<File?> resolvePosterBlur(CharacterAsset asset);
 }
 
+/// Optional lifecycle hook used by cache implementations to keep an asset
+/// protected while a controller is initializing or playing it.
+abstract interface class CharacterAssetLifecycle {
+  void protect(String assetId);
+  void release(String assetId);
+}
+
+abstract interface class CharacterAssetAvailability {
+  Future<Set<String>> readyVideoIds(CharacterManifest manifest);
+  Future<Set<String>> readyPosterIds(CharacterManifest manifest);
+}
+
 class MockVaultAssetRepository implements CharacterAssetRepository {
   const MockVaultAssetRepository({
     this.available = const <String, LocalCharacterMedia>{},

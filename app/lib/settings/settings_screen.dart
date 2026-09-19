@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../app/providers.dart';
 import '../character/manifest/manifest_models.dart';
 import '../character/policy/owner_policy.dart';
+import '../character/vault/vault_models.dart';
 import '../voice/voice_preferences.dart';
 
 class SettingsScreen extends ConsumerWidget {
@@ -17,6 +18,7 @@ class SettingsScreen extends ConsumerWidget {
     final notifier = ref.read(ownerPolicyProvider.notifier);
     final policySample = ref.watch(manifestProvider).byId['chr_003'];
     final voice = ref.read(voicePreferencesProvider);
+    final vault = ref.read(characterVaultProvider);
     final dailyOverride =
         policySample != null &&
         (policy
@@ -25,7 +27,7 @@ class SettingsScreen extends ConsumerWidget {
                 ?.contains(StageContext.daily) ??
             false);
     return AnimatedBuilder(
-      animation: voice,
+      animation: Listenable.merge([voice, vault]),
       builder: (context, _) => Scaffold(
         appBar: AppBar(title: const Text('Cài đặt')),
         body: ListView(
@@ -152,6 +154,66 @@ class SettingsScreen extends ConsumerWidget {
                 ),
                 onTap: () => Navigator.pushNamed(context, '/voice-lab'),
               ),
+            const Divider(),
+            const ListTile(
+              key: Key('character-media-heading'),
+              leading: Icon(Icons.video_library_outlined),
+              title: Text('Character Media'),
+            ),
+            ListTile(
+              key: const Key('character-media-status'),
+              title: Text(vault.snapshot.label),
+              subtitle: Text(
+                '${vault.snapshot.downloadedCount}/${vault.snapshot.totalCount} assets · '
+                '${_formatBytes(vault.snapshot.usedBytes)} · '
+                'manifest ${vault.snapshot.manifestVersion}',
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  FilledButton.tonalIcon(
+                    key: const Key('character-media-download'),
+                    onPressed: vault.downloadDailyPack,
+                    icon: const Icon(Icons.download_outlined),
+                    label: const Text('Download / update'),
+                  ),
+                  if (policy.relationshipStageEnabled)
+                    FilledButton.tonalIcon(
+                      key: const Key('character-media-relationship-download'),
+                      onPressed: vault.downloadRelationshipPack,
+                      icon: const Icon(Icons.favorite_outline),
+                      label: const Text('Download relationship media'),
+                    ),
+                  OutlinedButton.icon(
+                    key: const Key('character-media-pause-resume'),
+                    onPressed:
+                        vault.snapshot.status == CharacterVaultStatus.paused
+                        ? vault.resume
+                        : vault.pause,
+                    icon: Icon(
+                      vault.snapshot.status == CharacterVaultStatus.paused
+                          ? Icons.play_arrow
+                          : Icons.pause,
+                    ),
+                    label: Text(
+                      vault.snapshot.status == CharacterVaultStatus.paused
+                          ? 'Resume'
+                          : 'Pause',
+                    ),
+                  ),
+                  TextButton.icon(
+                    key: const Key('character-media-clear'),
+                    onPressed: vault.clearNonEssentialCache,
+                    icon: const Icon(Icons.cleaning_services_outlined),
+                    label: const Text('Clear non-essential cache'),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -196,5 +258,10 @@ class SettingsScreen extends ConsumerWidget {
         notifier.setAllowedModes(asset, modes, confirmSensitive: true);
       }
     }
+  }
+
+  static String _formatBytes(int bytes) {
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
 }
